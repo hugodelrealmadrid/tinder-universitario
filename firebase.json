@@ -1,0 +1,28 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "tinder-universitario",
+          "appId": "1:208598232745:android:91f9c08096304b1aff43b8",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "tinder-universitario",
+          "configurations": {
+            "android": "1:208598232745:android:91f9c08096304b1aff43b8",
+            "web": "1:208598232745:web:46fdb1c8ebeb22cfff43b8"
+          }
+        }
+      }
+    }
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "208598232745",
+    "project_id": "tinder-universitario",
+    "storage_bucket": "tinder-universitario.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:208598232745:android:91f9c08096304b1aff43b8",
+        "android_client_info": {
+          "package_name": "com.example.tinder_universitario"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "208598232745-9uf47cfk2tkkap615knqlhjokj4veaqt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBAS_KgUtZnmkA-nYozAldb2Cc3e01NQ8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "208598232745-9uf47cfk2tkkap615knqlhjokj4veaqt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

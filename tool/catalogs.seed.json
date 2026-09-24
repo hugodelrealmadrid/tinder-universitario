@@ -1,0 +1,39 @@
+{
+  "careers": {
+    "medicina": {"name": "Medicina", "isActive": true},
+    "odontologia": {"name": "Odontología", "isActive": true},
+    "bioquimica_farmacia": {"name": "Bioquímica y Farmacia", "isActive": true},
+    "fisioterapia_kinesiologia": {"name": "Fisioterapia y Kinesiología", "isActive": true},
+    "enfermeria": {"name": "Enfermería Clínico-Quirúrgica", "isActive": true},
+    "nutricion_dietetica": {"name": "Nutrición y Dietética", "isActive": true},
+    "ingenieria_comercial": {"name": "Ingeniería Comercial", "isActive": true},
+    "comercio_internacional": {"name": "Ingeniería en Comercio Internacional", "isActive": true},
+    "derecho": {"name": "Derecho y Ciencias Jurídicas", "isActive": true},
+    "comunicacion": {"name": "Comunicación Estratégica y Digital", "isActive": true},
+    "administracion_empresas": {"name": "Administración de Empresas", "isActive": true},
+    "psicologia": {"name": "Psicología", "isActive": true},
+    "ingenieria_financiera": {"name": "Ingeniería Financiera y de Riesgos", "isActive": true},
+    "ciencia_datos": {"name": "Ciencia de Datos e Inteligencia de Negocios", "isActive": true},
+    "ingenieria_biomedica": {"name": "Ingeniería Biomédica", "isActive": true},
+    "ingenieria_electronica": {"name": "Ingeniería Electrónica", "isActive": true},
+    "sistemas": {"name": "Ingeniería de Sistemas Informáticos", "isActive": true},
+    "arquitectura": {"name": "Arquitectura y Urbanismo", "isActive": true},
+    "diseno_interiores": {"name": "Diseño de Interiores", "isActive": true},
+    "diseno_grafico": {"name": "Diseño Gráfico y Comunicación Visual", "isActive": true},
+    "gastronomia": {"name": "Ciencias Gastronómicas", "isActive": true},
+    "ingenieria_civil": {"name": "Ingeniería Civil", "isActive": true},
+    "tecnologia_alimentaria": {"name": "Ingeniería en Tecnología Alimentaria", "isActive": true},
+    "ingenieria_aeronautica": {"name": "Ingeniería Aeronáutica", "isActive": true},
+    "electromecanica": {"name": "Ingeniería Electromecánica", "isActive": true},
+    "mecanica_automatizacion": {"name": "Ingeniería Mecánica y de Automatización Industrial", "isActive": true},
+    "ingenieria_industrial": {"name": "Ingeniería Industrial", "isActive": true},
+    "ingenieria_energia": {"name": "Ingeniería en Energía", "isActive": true}
+  },
+  "interests": {
+    "musica": {"name": "Música", "isActive": true},
+    "deportes": {"name": "Deportes", "isActive": true},
+    "lectura": {"name": "Lectura", "isActive": true},
+    "cine": {"name": "Cine", "isActive": true},
+    "tecnologia": {"name": "Tecnología", "isActive": true}
+  }
+}

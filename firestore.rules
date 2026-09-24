@@ -1,0 +1,219 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function validGender(value) { return value in ['masculino', 'femenino']; }
+    // Debe coincidir con DiscoveryLimits.maxAge y PreferredGender en Dart.
+    function validPreferences(data) {
+      return data.keys().hasAll(['minAge', 'maxAge', 'preferredGender', 'updatedAt'])
+        && data.keys().hasOnly(['minAge', 'maxAge', 'preferredGender', 'updatedAt'])
+        && data.minAge is int && data.maxAge is int
+        && data.minAge >= 18 && data.minAge <= data.maxAge && data.maxAge <= 100
+        && data.preferredGender in ['masculino', 'femenino', 'ambos'];
+    }
+    function age(date) {
+      return request.time.year() - date.year() -
+        ((request.time.month() < date.month() ||
+          (request.time.month() == date.month() && request.time.day() < date.day())) ? 1 : 0);
+    }
+    function accepts(preferences, profile) {
+      return validPreferences(preferences) && validGender(profile.gender)
+        && (preferences.preferredGender == 'ambos' || preferences.preferredGender == profile.gender)
+        && age(profile.birthDate) >= preferences.minAge && age(profile.birthDate) <= preferences.maxAge;
+    }
+    function reciprocal(from, to) {
+      let a = get(/databases/$(database)/documents/users/$(from)).data;
+      let b = get(/databases/$(database)/documents/users/$(to)).data;
+      let pa = get(/databases/$(database)/documents/preferences/$(from)).data;
+      let pb = get(/databases/$(database)/documents/preferences/$(to)).data;
+      return from != to && a.isActive == true && b.isActive == true
+        && complete(a) && complete(b) && accepts(pa, b) && accepts(pb, a);
+    }
+    function validUid(uid) { return uid is string && uid.matches('[A-Za-z0-9_-]{1,128}'); }
+    function swipeIdFor(from, to) { return from + '.' + to; }
+    function matchIdFor(a, b) { return a < b ? swipeIdFor(a, b) : swipeIdFor(b, a); }
+    function mutualLikeAfter(a, b) {
+      let ab = getAfter(/databases/$(database)/documents/swipes/$(swipeIdFor(a,b))).data;
+      let ba = getAfter(/databases/$(database)/documents/swipes/$(swipeIdFor(b,a))).data;
+      return ab.fromUserId == a && ab.toUserId == b && ab.type == 'like'
+        && ba.fromUserId == b && ba.toUserId == a && ba.type == 'like';
+    }
+    function matchingRequired(data) {
+      let reverse = /databases/$(database)/documents/swipes/$(swipeIdFor(data.toUserId,data.fromUserId));
+      return data.type != 'like' || !exists(reverse) || get(reverse).data.type != 'like'
+        || getAfter(/databases/$(database)/documents/matches/$(matchIdFor(data.fromUserId,data.toUserId))).data.users
+          == (data.fromUserId < data.toUserId ? [data.fromUserId,data.toUserId] : [data.toUserId,data.fromUserId]);
+    }
+    function matched(a, b) {
+      let pair = get(/databases/$(database)/documents/matches/$(matchIdFor(a,b))).data;
+      return pair.isActive == true && a in pair.users && b in pair.users;
+    }
+    function matchedCard(viewer, uid) {
+      let user = get(/databases/$(database)/documents/users/$(uid)).data;
+      return viewer != uid && matched(viewer, uid) && user.isActive == true
+        && complete(user) && resource.data == cardFields(user);
+    }
+    function cardFields(user) {
+      return {'firstName': user.firstName, 'birthDate': user.birthDate, 'gender': user.gender,
+        'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl,
+        'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt};
+    }
+    function adult(date) {
+      return date is timestamp &&
+        (request.time.year() - date.year() > 18 ||
+          (request.time.year() - date.year() == 18 &&
+            (request.time.month() > date.month() ||
+              (request.time.month() == date.month() && request.time.day() >= date.day()))));
+    }
+    function careerActive(id) {
+      return id is string && get(/databases/$(database)/documents/careers/$(id)).data.isActive == true;
+    }
+    function interestActive(id) {
+      return id is string && get(/databases/$(database)/documents/interests/$(id)).data.isActive == true;
+    }
+    function validInterests(ids) {
+      return (ids.size() < 1 || interestActive(ids[0]))
+        && (ids.size() < 2 || interestActive(ids[1]))
+        && (ids.size() < 3 || interestActive(ids[2]))
+        && (ids.size() < 4 || interestActive(ids[3]))
+        && (ids.size() < 5 || interestActive(ids[4]));
+    }
+    function ownPhoto(url, uid) {
+      return url is string && url.size() < 2048 && url.matches(
+        'https://firebasestorage[.]googleapis[.]com/v0/b/tinder-universitario[.]firebasestorage[.]app/o/profile_photos%2F' + uid + '%2F[A-Za-z0-9_-]+[?]alt=media&token=[A-Za-z0-9-]+');
+    }
+    function validPhotos(urls, uid) {
+      return urls is list && urls.size() <= 6 && urls.toSet().size() == urls.size()
+        && (urls.size() < 1 || ownPhoto(urls[0], uid))
+        && (urls.size() < 2 || ownPhoto(urls[1], uid))
+        && (urls.size() < 3 || ownPhoto(urls[2], uid))
+        && (urls.size() < 4 || ownPhoto(urls[3], uid))
+        && (urls.size() < 5 || ownPhoto(urls[4], uid))
+        && (urls.size() < 6 || ownPhoto(urls[5], uid));
+    }
+    function complete(data) {
+      return data.firstName.matches('.*\\S.*') && data.lastName.matches('.*\\S.*')
+        && adult(data.birthDate) && validGender(data.gender)
+        && careerActive(data.careerId) && data.photoUrls.size() > 0
+        && data.mainPhotoUrl is string && data.mainPhotoUrl in data.photoUrls;
+    }
+    function schema(data, uid) {
+      return data.keys().hasAll(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && data.firstName is string && data.firstName.size() <= 80
+        && data.lastName is string && data.lastName.size() <= 80
+        && data.gender is string && data.gender.size() <= 50
+        && data.description is string && data.description.size() <= 500
+        && (data.birthDate == null || adult(data.birthDate))
+        && (data.careerId == null || (data.careerId is string && data.careerId.size() > 0 && data.careerId.size() <= 128))
+        && data.interestIds is list && data.interestIds.size() <= 5
+        && data.interestIds.toSet().size() == data.interestIds.size()
+        && validPhotos(data.photoUrls, uid)
+        && ((data.photoUrls.size() == 0 && data.mainPhotoUrl == null)
+          || (data.photoUrls.size() > 0 && data.mainPhotoUrl is string && data.mainPhotoUrl in data.photoUrls))
+        && data.isActive is bool && (!data.isActive || complete(data))
+        && data.updatedAt == request.time;
+    }
+    match /users/{uid} {
+      allow get: if owner(uid);
+      allow create: if owner(uid) && schema(request.resource.data, uid)
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'user'
+        && request.resource.data.isActive == false
+        && adult(request.resource.data.birthDate)
+        && request.resource.data.firstName == '' && request.resource.data.lastName == ''
+        && request.resource.data.gender == '' && request.resource.data.description == ''
+        && request.resource.data.careerId == null && request.resource.data.interestIds == []
+        && request.resource.data.photoUrls == [] && request.resource.data.mainPhotoUrl == null
+        && request.resource.data.createdAt == request.time;
+      allow update: if owner(uid) && schema(request.resource.data, uid)
+        // Un género nuevo debe ser válido. Un valor legado o vacío solo
+        // puede conservarse sin cambios en un perfil inactivo (p. ej. fotos).
+        && (validGender(request.resource.data.gender)
+          || (request.resource.data.gender == resource.data.gender
+            && request.resource.data.isActive == false))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'firstName', 'lastName', 'birthDate', 'gender', 'description', 'careerId',
+          'photoUrls', 'mainPhotoUrl', 'interestIds', 'isActive', 'updatedAt'])
+        && (request.resource.data.careerId == resource.data.careerId
+          || request.resource.data.careerId == null || careerActive(request.resource.data.careerId))
+        && (request.resource.data.interestIds == resource.data.interestIds || validInterests(request.resource.data.interestIds));
+      allow list, delete: if false;
+    }
+    match /careers/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /interests/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /preferences/{uid} {
+      allow get: if owner(uid);
+      allow create, update: if owner(uid) && validPreferences(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow list, delete: if false;
+    }
+    // Índice sin datos personales: solo estado y fecha de sincronización.
+    match /discoveryIndex/{uid} {
+      allow get: if owner(uid) || (request.auth != null && resource.data.isActive == true);
+      allow list: if request.auth != null && resource.data.isActive == true
+        && request.query.limit != null && request.query.limit <= 25;
+      allow create, update: if owner(uid) && validUid(uid)
+        && request.resource.data == {
+          'isActive': getAfter(/databases/$(database)/documents/users/$(uid)).data.isActive,
+          'updatedAt': getAfter(/databases/$(database)/documents/users/$(uid)).data.updatedAt};
+      allow delete: if false;
+    }
+    match /discoveryCards/{uid} {
+      allow get: if owner(uid) || (request.auth != null && validUid(request.auth.uid) && validUid(uid)
+        && ((reciprocal(request.auth.uid, uid)
+        && resource.data == cardFields(get(/databases/$(database)/documents/users/$(uid)).data)
+        && !exists(/databases/$(database)/documents/swipes/$(swipeIdFor(request.auth.uid, uid))))
+          || matchedCard(request.auth.uid, uid)));
+      allow list: if false;
+      allow create, update: if owner(uid) && validUid(uid)
+        && request.resource.data == cardFields(getAfter(/databases/$(database)/documents/users/$(uid)).data);
+      allow delete: if false;
+    }
+    match /swipes/{swipeId} {
+      // Se puede comprobar la inexistencia del ID propio en una transacción.
+      allow get: if request.auth != null && validUid(request.auth.uid)
+        && (swipeId.matches(request.auth.uid + '[.][A-Za-z0-9_-]{1,128}')
+          || swipeId.matches('[A-Za-z0-9_-]{1,128}[.]' + request.auth.uid));
+      allow list: if request.auth != null && resource.data.fromUserId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['fromUserId', 'toUserId', 'type', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['fromUserId', 'toUserId', 'type', 'createdAt'])
+        && request.resource.data.fromUserId == request.auth.uid
+        && validUid(request.resource.data.fromUserId) && validUid(request.resource.data.toUserId)
+        && request.resource.data.fromUserId != request.resource.data.toUserId
+        && swipeId == swipeIdFor(request.resource.data.fromUserId, request.resource.data.toUserId)
+        && request.resource.data.type in ['like', 'pass']
+        && request.resource.data.createdAt == request.time
+        && reciprocal(request.auth.uid, request.resource.data.toUserId)
+        && matchingRequired(request.resource.data);
+      allow update, delete: if false;
+    }
+    match /matches/{matchId} {
+      // El ID de una pareja permite leer su inexistencia dentro de la transacción.
+      allow get: if request.auth != null && validUid(request.auth.uid)
+        && ((exists(/databases/$(database)/documents/matches/$(matchId)) && request.auth.uid in resource.data.users)
+          || (!exists(/databases/$(database)/documents/matches/$(matchId))
+            && (matchId.matches(request.auth.uid + '[.][A-Za-z0-9_-]{1,128}')
+              || matchId.matches('[A-Za-z0-9_-]{1,128}[.]' + request.auth.uid))));
+      allow list: if request.auth != null && request.auth.uid in resource.data.users;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['users','createdAt','isActive'])
+        && request.resource.data.keys().hasOnly(['users','createdAt','isActive'])
+        && request.resource.data.users is list && request.resource.data.users.size() == 2
+        && validUid(request.resource.data.users[0]) && validUid(request.resource.data.users[1])
+        && request.resource.data.users[0] < request.resource.data.users[1]
+        && request.auth.uid in request.resource.data.users
+        && matchId == matchIdFor(request.resource.data.users[0],request.resource.data.users[1])
+        && request.resource.data.isActive == true && request.resource.data.createdAt == request.time
+        && mutualLikeAfter(request.resource.data.users[0],request.resource.data.users[1]);
+      allow update, delete: if false;
+    }
+  }
+}
