@@ -140,7 +140,15 @@ test('Legado no se migra al leer; permite conservarlo inactivo y corregirlo expl
 
 
 const preference = (gender='ambos', min=18, max=100) => ({minAge:min,maxAge:max,preferredGender:gender,updatedAt:serverTimestamp()});
-const projection = data => Object.fromEntries(['firstName','birthDate','gender','description','careerId','mainPhotoUrl','interestIds','isActive','updatedAt'].map(key=>[key,data[key]]));
+const ageAt = (birth, now = new Date()) => {
+  const date = birth.toDate();
+  return now.getUTCFullYear() - date.getUTCFullYear() -
+    ((now.getUTCMonth() < date.getUTCMonth() || (now.getUTCMonth() === date.getUTCMonth() && now.getUTCDate() < date.getUTCDate())) ? 1 : 0);
+};
+const projection = data => ({
+  ...Object.fromEntries(['firstName','gender','description','careerId','mainPhotoUrl','interestIds','isActive','updatedAt'].map(key=>[key,data[key]])),
+  age: data.birthDate instanceof Timestamp ? ageAt(data.birthDate) : null,
+});
 const birthday = age => { const now = new Date(); return Timestamp.fromDate(new Date(Date.UTC(now.getUTCFullYear()-age,now.getUTCMonth(),now.getUTCDate()))); };
 async function seedDiscovery(options={}) {
   await env.withSecurityRulesDisabled(async admin => {
@@ -179,7 +187,7 @@ test('Preferencias permanecen privadas y solo el dueño puede escribir', async (
 test('Compatibilidad recíproca autoriza ambas fichas sin abrir users ni preferences', async () => {
   await seedDiscovery();
   const card=await assertSucceeds(getDoc(cardForBob()));
-  if ('email' in card.data() || 'role' in card.data() || 'preferredGender' in card.data()) throw new Error('Ficha expone campos privados');
+  if (['birthDate','email','role','preferredGender','minAge','maxAge','lastName','photoUrls'].some(key => key in card.data())) throw new Error('Ficha expone campos privados');
   await assertSucceeds(getDoc(doc(context('bob').firestore(),'discoveryCards/ana')));
   await assertFails(getDoc(doc(db(),'users/bob')));
   await assertFails(getDoc(doc(db(),'preferences/bob')));
@@ -409,3 +417,96 @@ test('Dos LIKE concurrentes con lectura inicial simultánea terminan en dos swip
 });
 
 
+
+test('Privacidad: Discovery entrega edad entera y solo campos públicos permitidos', async () => {
+  await seedDiscovery();
+  const card = (await assertSucceeds(getDoc(cardForBob()))).data();
+  assert.equal(card.age, 21);
+  assert.deepEqual(Object.keys(card).sort(), ['firstName','age','gender','description','careerId','mainPhotoUrl','interestIds','isActive','updatedAt'].sort());
+  const index = await getDocs(query(collection(db(),'discoveryIndex'),where('isActive','==',true),limit(25)));
+  for (const row of index.docs) assert.deepEqual(Object.keys(row.data()).sort(), ['isActive','updatedAt'].sort());
+  assert.ok((await getDoc(doc(context('bob').firestore(),'users/bob'))).data().birthDate instanceof Timestamp);
+});
+
+test('Privacidad: fichas legadas con birthDate son ilegibles incluso para un match', async () => {
+  await seedDiscovery();
+  await decideWithMatch('ana','bob'); await decideWithMatch('bob','ana');
+  await env.withSecurityRulesDisabled(async admin => {
+    const store = admin.firestore();
+    const user = (await getDoc(doc(store,'users/bob'))).data();
+    const legacy = projection(user); delete legacy.age; legacy.birthDate = user.birthDate;
+    await setDoc(doc(store,'discoveryCards/bob'), legacy);
+  });
+  await assertFails(getDoc(cardForBob()));
+  await assertSucceeds(getDoc(doc(db(),'matches/ana.bob')));
+  await assertSucceeds(getDoc(doc(context('bob').firestore(),'users/bob')));
+});
+
+test('Privacidad: edad falsificada, fecha exacta y preferencias extra rechazadas al publicar', async () => {
+  await seedDiscovery();
+  const user = (await getDoc(profileRef())).data();
+  for (const change of [{age:18},{age:22.5},{age:null},{birthDate:user.birthDate},{email:user.email},
+    {minAge:18},{preferredGender:'ambos'},{internalFlag:true}]) {
+    await assertFails(setDoc(doc(db(),'discoveryCards/ana'), {...projection(user), ...change}));
+  }
+});
+
+test('Privacidad: edad vencida tras cumpleaños no se muestra hasta republicar', async () => {
+  await seedDiscovery();
+  await decideWithMatch('ana','bob'); await decideWithMatch('bob','ana');
+  // Simula una ficha publicada antes del cumpleaños: mismo perfil y timestamp, edad anterior.
+  await env.withSecurityRulesDisabled(admin => updateDoc(doc(admin.firestore(),'discoveryCards/bob'), {age:20}));
+  await assertFails(getDoc(cardForBob()));
+  const store = context('bob').firestore();
+  const before = (await getDoc(doc(store,'users/bob'))).data();
+  const changes = {updatedAt:serverTimestamp()};
+  const batch = writeBatch(store);
+  batch.update(doc(store,'users/bob'), changes);
+  batch.set(doc(store,'discoveryCards/bob'), projection({...before,...changes}));
+  batch.set(doc(store,'discoveryIndex/bob'), {isActive:true,updatedAt:serverTimestamp()});
+  await assertSucceeds(batch.commit());
+  const card = (await assertSucceeds(getDoc(cardForBob()))).data();
+  assert.equal(card.age,21); assert.equal('birthDate' in card,false);
+  assert.ok((await getDoc(doc(store,'users/bob'))).data().birthDate.isEqual(before.birthDate));
+});
+
+test('Privacidad: republicar elimina birthDate legado sin borrar documentos ni el match', async () => {
+  await seedDiscovery();
+  const store = context('bob').firestore();
+  const user = (await getDoc(doc(store,'users/bob'))).data();
+  await env.withSecurityRulesDisabled(admin => setDoc(doc(admin.firestore(),'discoveryCards/bob'),
+    {...projection(user),birthDate:user.birthDate,email:user.email}));
+  await assertFails(getDoc(cardForBob()));
+  await assertSucceeds(setDoc(doc(store,'discoveryCards/bob'),projection(user)));
+  const safe = (await assertSucceeds(getDoc(cardForBob()))).data();
+  assert.equal('birthDate' in safe,false); assert.equal('email' in safe,false);
+});
+
+test('Match: LIKE seguido de PASS no genera coincidencia', async () => {
+  await seedDiscovery();
+  assert.equal(await decideWithMatch('ana','bob','like'),false);
+  assert.equal(await decideWithMatch('bob','ana','pass'),false);
+  assert.equal((await getDoc(doc(db(),'matches/ana.bob'))).exists(),false);
+});
+
+test('Sin permisos globales ni colección profile_photos en Firestore', async () => {
+  for (const path of ['private/secret','profile_photos/ana','chat/example']) {
+    await assertFails(setDoc(doc(db(),path),{value:'forbidden'}));
+    await assertFails(getDoc(doc(db(),path)));
+  }
+  await assertFails(setDoc(doc(db(),'interests/new'),{name:'No autorizado',isActive:true}));
+  await assertFails(deleteDoc(profileRef()));
+  await assertFails(getDocs(collection(env.unauthenticatedContext().firestore(),'interests')));
+});
+
+test('Storage valida vacío, subcarpetas y anónimos; PNG/WebP propios permitidos', async () => {
+  const store = context('ana').storage();
+  await assertFails(uploadBytes(ref(store,'profile_photos/ana/empty'),new Uint8Array(),{contentType:'image/png'}));
+  await assertFails(uploadBytes(ref(store,'profile_photos/ana/nested/photo'),new Uint8Array([1]),{contentType:'image/png'}));
+  await assertFails(uploadBytes(ref(env.unauthenticatedContext().storage(),'profile_photos/ana/anon'),new Uint8Array([1]),{contentType:'image/png'}));
+  for (const type of ['png','webp']) {
+    const item = ref(store,`profile_photos/ana/qa-${type}`);
+    await assertSucceeds(uploadBytes(item,new Uint8Array([1]),{contentType:`image/${type}`}));
+    await assertSucceeds(deleteObject(item));
+  }
+});

@@ -5,8 +5,9 @@
 > leer fichas vigentes de participantes de un match. Ver `README_BLOQUE_4.md`.
 > No cambia la privacidad de `users` ni de `preferences`.
 >
-> Pendiente: **Eliminar la exposición de birthDate exacta en Discovery antes de
-> considerar terminada la parte de privacidad del sistema.**
+> Actualización de cierre: la ficha entrega solo `age` y las reglas rechazan
+> fechas exactas y edades vencidas. Ver [QA Sprint 1 y 2](README_QA_SPRINT_1_2.md).
+> El cambio está validado localmente; no se ha desplegado.
 
 Proyecto local: `C:\Users\HP\Desktop\tinder_universitario`. Firebase: `tinder-universitario`.
 No se ejecutaron despliegues, migraciones ni operaciones sobre datos remotos.
@@ -47,8 +48,9 @@ Firestore no permite que una consulta cliente haga un join con preferencias priv
 Las reglas no filtran resultados de consultas. Para conservar `users` y `preferences` privados se añaden:
 
 * `discoveryIndex/{uid}`: `isActive: bool`, `updatedAt: timestamp`.
-* `discoveryCards/{uid}`: `firstName`, `birthDate`, `gender`, `description`, `careerId`,
-  `mainPhotoUrl`, `interestIds`, `isActive`, `updatedAt`, copiados del usuario.
+* `discoveryCards/{uid}`: `firstName`, `age`, `gender`, `description`, `careerId`,
+  `mainPhotoUrl`, `interestIds`, `isActive`, `updatedAt`. Solo `age` se deriva;
+  la fecha exacta permanece en el perfil privado.
 
 El índice solo admite consultas autenticadas de activos y páginas de hasta 25 documentos.
 Las fichas no pueden listarse: se solicitan individualmente. Las reglas consultan internamente los dos
@@ -57,12 +59,14 @@ las edades y géneros son mutuamente aceptados, la ficha coincide con el usuario
 `ambos` admite los dos géneros del perfil. Los extremos de edad son inclusivos.
 
 La edad se calcula restando años y descontando uno si todavía no ocurrió el cumpleaños,
-con fechas de calendario UTC tanto en Dart como en reglas. Nunca se guarda una edad permanente.
+con fechas de calendario UTC tanto en Dart como en reglas. Se guarda una edad derivada
+al publicar; si vence tras un cumpleaños, la ficha deja de ser legible por terceros
+hasta que su propietario guarde el perfil. No se publican fechas de cumpleaños ni de próxima actualización.
 El 29 de febrero cumple años el 1 de marzo en años no bisiestos según esta comparación.
 
 La UI muestra foto principal, nombre, edad calculada, nombres de carrera e intereses y descripción.
-No muestra email, UID ni fecha exacta. **La ficha sí transporta birthDate para calcular la edad:**
-un cliente autorizado técnicamente puede inspeccionarla. Esto no equivale a ocultar la fecha en la capa de datos.
+No muestra email, UID ni fecha exacta. La ficha tampoco transporta `birthDate`, email
+ni preferencias; las reglas rechazan fichas legadas con esos campos incluso para matches.
 El índice revela IDs de documentos activos a clientes autenticados; no contiene nombres ni preferencias.
 Las preferencias ajenas y documentos completos de usuarios nunca se entregan al cliente.
 

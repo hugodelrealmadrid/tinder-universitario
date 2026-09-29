@@ -15,7 +15,7 @@ abstract final class PreferredGender {
 }
 
 /// Edad cumplida por fecha de calendario UTC, igual que las reglas Firestore.
-/// Se calcula cada vez; nunca se guarda como un campo permanente.
+/// La ficha pública guarda solo esta edad; las reglas comprueban su vigencia.
 int ageOn(DateTime birthDate, {DateTime? today}) {
   final now = (today ?? DateTime.now()).toUtc();
   final birth = birthDate.toUtc();
@@ -45,7 +45,13 @@ class DiscoveryPreferences {
     required DateTime birthDate,
     DateTime? today,
   }) {
-    final age = ageOn(birthDate, today: today);
+    return acceptsAge(
+      gender: gender,
+      age: ageOn(birthDate, today: today),
+    );
+  }
+
+  bool acceptsAge({required String gender, required int age}) {
     return isValid &&
         ProfileGender.isValid(gender) &&
         age >= minAge &&

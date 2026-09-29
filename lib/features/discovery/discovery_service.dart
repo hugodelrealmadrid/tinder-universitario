@@ -50,9 +50,11 @@ class DiscoveryService {
         .doc(uid)
         .get(const GetOptions(source: Source.server));
     if (!publication.exists ||
-        publication.data()?['updatedAt'] != user.data()?['updatedAt']) {
+        publication.data()?['updatedAt'] != user.data()?['updatedAt'] ||
+        publication.data()!.containsKey('birthDate') ||
+        publication.data()?['age'] != ageOn(profile.birthDate!)) {
       throw const DiscoveryException(
-        'Abre Perfil y pulsa Guardar perfil para habilitar tu ficha de descubrimiento.',
+        'Abre Perfil y pulsa Guardar perfil para actualizar tu ficha y tu edad de descubrimiento.',
       );
     }
     final swipes = await _db

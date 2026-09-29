@@ -52,7 +52,7 @@ Guía oficial: https://firebase.google.com/docs/flutter/setup
 1. Abre la app y pulsa Crear una cuenta. Usa un correo nuevo, contraseña de al menos 6 caracteres (o la política superior configurada en Firebase), confirmación y fecha de nacimiento con 18 años cumplidos.
 2. Pulsa Crear cuenta. Debe aparecer loading y luego Sesión iniciada. El inicio solo se muestra después de confirmar el documento en Firestore.
 3. En Firebase Console → Authentication → Users, copia el UID del correo registrado.
-4. En Firestore → Data, comprueba `users/{ese UID}`: firstName='', lastName='', email, birthDate (Timestamp UTC de la fecha), gender='', description='', careerId=null, photoUrls=[], mainPhotoUrl=null, interestIds=[], role='user', isActive=true, createdAt y updatedAt (timestamps del servidor). No debe existir semestre ni una segunda carrera.
+4. En Firestore → Data, comprueba `users/{ese UID}`: firstName='', lastName='', email, birthDate (Timestamp UTC de la fecha), gender='', description='', careerId=null, photoUrls=[], mainPhotoUrl=null, interestIds=[], role='user', isActive=false, createdAt y updatedAt (timestamps del servidor). No debe existir semestre ni una segunda carrera.
 5. Recarga el navegador en la misma dirección y puerto o reinicia la app Android. Debe mantenerse la sesión. Se necesita conexión para confirmar el documento en Firestore; la persistencia de Auth no convierte el perfil en un flujo sin conexión.
 6. Pulsa Cerrar sesión. Debe volver al login. Recarga: debe seguir en login.
 7. Inicia sesión con el mismo correo y contraseña. Debe aparecer Sesión iniciada sin crear otro documento ni cambiar createdAt.

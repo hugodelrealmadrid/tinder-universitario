@@ -13,7 +13,6 @@ import 'package:tinder_universitario/features/preferences/discovery_preferences.
 void main() {
   late FakeFirebaseFirestore db;
   late DiscoveryService discovery;
-  final now = DateTime.now().toUtc();
   setUp(() async {
     db = FakeFirebaseFirestore();
     discovery = DiscoveryService(firestore: db);
@@ -24,9 +23,7 @@ void main() {
     for (final uid in ['ana', 'bob', 'carol', 'dave']) {
       await db.collection('discoveryCards').doc(uid).set({
         'firstName': uid == 'bob' ? 'Roberto' : 'Estudiante',
-        'birthDate': Timestamp.fromDate(
-          DateTime.utc(now.year - 22, now.month, now.day),
-        ),
+        'age': 22,
         'gender': 'masculino',
         'description': '',
         'careerId': 'sistemas',
@@ -226,7 +223,7 @@ class _FeedbackDiscovery extends DiscoveryService {
     return DiscoveryCandidate(
       id: 'bob',
       firstName: 'Roberto',
-      birthDate: DateTime.utc(2000),
+      age: 26,
       gender: 'masculino',
       careerId: 'sistemas',
       mainPhotoUrl: 'https://example.test/photo.jpg',

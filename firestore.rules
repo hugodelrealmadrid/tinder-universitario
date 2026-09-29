@@ -54,7 +54,9 @@ service cloud.firestore {
         && complete(user) && resource.data == cardFields(user);
     }
     function cardFields(user) {
-      return {'firstName': user.firstName, 'birthDate': user.birthDate, 'gender': user.gender,
+      // Solo edad cumplida. Comparar también en lectura cierra el acceso a
+      // fichas antiguas con birthDate o a edades vencidas tras un cumpleaños.
+      return {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender,
         'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl,
         'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt};
     }

@@ -57,7 +57,7 @@ void main() {
   }) => DiscoveryCandidate(
     id: id,
     firstName: 'Bob',
-    birthDate: birth,
+    age: ageOn(birth),
     gender: ProfileGender.female,
     careerId: 'sistemas',
     mainPhotoUrl: photo,
@@ -291,22 +291,19 @@ void main() {
       expect((await service.next())!.id, 'zCompatible');
     },
   );
-  test(
-    'Ficha publicada no contiene email, rol, preferencias ni edad permanente',
-    () {
-      final card = DiscoveryPublication.card(user('ana'));
-      for (final field in [
-        'email',
-        'role',
-        'preferredGender',
-        'age',
-        'createdAt',
-      ]) {
-        expect(card.containsKey(field), isFalse);
-      }
-      expect(card['birthDate'], isA<Timestamp>());
-    },
-  );
+  test('Ficha publicada contiene solo edad derivada y ningún dato privado', () {
+    final card = DiscoveryPublication.card(user('ana'));
+    for (final field in [
+      'email',
+      'role',
+      'preferredGender',
+      'birthDate',
+      'createdAt',
+    ]) {
+      expect(card.containsKey(field), isFalse);
+    }
+    expect(card['age'], 22);
+  });
   testWidgets('Preferencias usa selectores sin escritura manual', (
     tester,
   ) async {

@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../preferences/discovery_preferences.dart';
 import '../profile/student_profile.dart';
 
@@ -23,7 +22,7 @@ class DiscoveryCandidate {
   const DiscoveryCandidate({
     required this.id,
     required this.firstName,
-    required this.birthDate,
+    required this.age,
     required this.gender,
     required this.careerId,
     required this.mainPhotoUrl,
@@ -32,15 +31,14 @@ class DiscoveryCandidate {
     required this.isActive,
   });
   final String id, firstName, gender, careerId, mainPhotoUrl, description;
-  final DateTime birthDate;
+  final int age;
   final List<String> interestIds;
   final bool isActive;
-  int get age => ageOn(birthDate);
   factory DiscoveryCandidate.fromMap(String id, Map<String, dynamic> data) =>
       DiscoveryCandidate(
         id: id,
         firstName: data['firstName'] as String,
-        birthDate: (data['birthDate'] as Timestamp).toDate().toUtc(),
+        age: data['age'] as int,
         gender: data['gender'] as String,
         careerId: data['careerId'] as String? ?? '',
         mainPhotoUrl: data['mainPhotoUrl'] as String? ?? '',
@@ -51,9 +49,8 @@ class DiscoveryCandidate {
   bool eligibleFor(
     String viewer,
     DiscoveryPreferences preferences,
-    Set<String> decided, {
-    DateTime? today,
-  }) =>
+    Set<String> decided,
+  ) =>
       id != viewer &&
       isActive &&
       firstName.trim().isNotEmpty &&
@@ -61,5 +58,5 @@ class DiscoveryCandidate {
       ProfileGender.isValid(gender) &&
       Uri.tryParse(mainPhotoUrl)?.scheme == 'https' &&
       !decided.contains(id) &&
-      preferences.accepts(gender: gender, birthDate: birthDate, today: today);
+      preferences.acceptsAge(gender: gender, age: age);
 }

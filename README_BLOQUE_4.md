@@ -71,13 +71,11 @@ del Bloque 3 no se vuelve a evaluar automáticamente. Para probar utilizar una p
   La ficha debe coincidir con el usuario actual y el perfil debe seguir completo y activo.
 * `users` y `preferences` siguen privados. Catálogos, Storage y Authentication conservan sus reglas/comportamiento.
 
-La fecha exacta, UID, email y preferencias no se muestran en Mis Matches. Se reutiliza la ficha
-reducida actual, que todavía entrega birthDate al cliente autorizado para calcular la edad.
-
-**Eliminar la exposición de birthDate exacta en Discovery antes de considerar terminada la parte de privacidad del sistema.**
-
-Este pendiente también afecta a las fichas reutilizadas por Mis Matches. No se resolvió con una
-reestructuración dentro de este bloque, conforme al alcance solicitado.
+Actualización del cierre técnico: Mis Matches reutiliza la ficha con `age`, sin `birthDate`,
+email ni preferencias. Las reglas rechazan el contrato antiguo y edades vencidas después de
+un cumpleaños. El match permanece y muestra «Perfil no disponible» hasta que el otro
+participante guarde su perfil actualizado. Esta corrección está probada localmente, sin deploy.
+Ver [QA Sprint 1 y 2](README_QA_SPRINT_1_2.md) para resultados y límites de la solución.
 
 Referencias oficiales usadas: [transacciones y getAfter](https://firebase.google.com/docs/firestore/manage-data/transactions)
 y [comparación lexicográfica en reglas](https://firebase.google.com/docs/reference/rules/rules.String).

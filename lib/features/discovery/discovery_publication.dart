@@ -1,12 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../preferences/discovery_preferences.dart';
 
-/// Proyección explícita, sin email, rol ni preferencias. Se sincroniza dentro
-/// de la misma transacción que Guardar perfil o una acción sobre sus fotos.
+/// Proyección sin birthDate, email, rol ni preferencias. La edad se renueva al
+/// guardar perfil/fotos y las reglas rechazan edades vencidas tras un cumpleaños.
 abstract final class DiscoveryPublication {
-  static Map<String, dynamic> card(Map<String, dynamic> user) => {
+  static Map<String, dynamic> card(
+    Map<String, dynamic> user, {
+    DateTime? today,
+  }) => {
+    'age': user['birthDate'] is Timestamp
+        ? ageOn((user['birthDate'] as Timestamp).toDate(), today: today)
+        : null,
     for (final field in [
       'firstName',
-      'birthDate',
       'gender',
       'description',
       'careerId',
