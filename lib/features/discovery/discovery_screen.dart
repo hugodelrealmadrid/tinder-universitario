@@ -4,6 +4,8 @@ import '../auth/auth_service.dart' show firebaseError;
 import '../preferences/discovery_preferences.dart';
 import 'discovery_models.dart';
 import 'discovery_service.dart';
+import '../safety/safety_dialog.dart';
+import '../safety/safety_service.dart';
 
 class DiscoveryScreen extends StatefulWidget {
   const DiscoveryScreen({
@@ -12,10 +14,12 @@ class DiscoveryScreen extends StatefulWidget {
     required this.onPreferences,
     required this.onProfile,
     this.service,
+    this.safetyService,
   });
   final String uid;
   final VoidCallback onPreferences, onProfile;
   final DiscoveryService? service;
+  final SafetyService? safetyService;
   @override
   State<DiscoveryScreen> createState() => _DiscoveryScreenState();
 }
@@ -24,6 +28,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
   late final _service = widget.service ?? DiscoveryService();
   DiscoveryCandidate? _candidate;
   bool _loading = true, _deciding = false;
+  bool _safetyOpen = false;
   String? _error, _notice;
   @override
   void initState() {
@@ -39,6 +44,54 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
 
   String _message(Object error) =>
       error is DiscoveryException ? error.message : firebaseError(error);
+
+  Future<void> _safety(SafetyAction action) async {
+    if (_deciding || _candidate == null) return;
+    final target = _candidate!.id;
+    setState(() {
+      _deciding = true;
+      _safetyOpen = true;
+    });
+    try {
+      final done = await showSafetyDialog(
+        context,
+        target: target,
+        action: action,
+        service: widget.safetyService,
+      );
+      if (!mounted || !done) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            action == SafetyAction.block
+                ? 'Usuario bloqueado.'
+                : 'Reporte enviado.',
+          ),
+        ),
+      );
+      if (action == SafetyAction.block) {
+        _service.exclude(target);
+        setState(() {
+          _candidate = null;
+          _loading = true;
+          _error = null;
+        });
+        final next = await _service.next();
+        if (mounted) setState(() => _candidate = next);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = _message(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deciding = false;
+          _safetyOpen = false;
+          _loading = false;
+        });
+      }
+    }
+  }
+
   Future<void> _load() async {
     if (_deciding) return;
     setState(() {
@@ -152,6 +205,25 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                     child: Text(_notice!),
                   ),
                 if (!_loading && _candidate != null) ...[
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: PopupMenuButton<SafetyAction>(
+                      key: const ValueKey('discovery-options'),
+                      tooltip: 'Opciones del perfil',
+                      enabled: !_deciding,
+                      onSelected: _safety,
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: SafetyAction.block,
+                          child: Text('Bloquear usuario'),
+                        ),
+                        PopupMenuItem(
+                          value: SafetyAction.report,
+                          child: Text('Reportar usuario'),
+                        ),
+                      ],
+                    ),
+                  ),
                   CandidateView(
                     candidate: _candidate!,
                     careerName:
@@ -188,7 +260,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                       ),
                     ],
                   ),
-                  if (_deciding) const LinearProgressIndicator(),
+                  if (_deciding && !_safetyOpen)
+                    const LinearProgressIndicator(),
                 ],
                 if (!_loading && _candidate == null && _error == null) ...[
                   const Icon(Icons.people_outline, size: 64),

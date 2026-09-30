@@ -32,6 +32,18 @@ service cloud.firestore {
     function validUid(uid) { return uid is string && uid.matches('[A-Za-z0-9_-]{1,128}'); }
     function swipeIdFor(from, to) { return from + '.' + to; }
     function matchIdFor(a, b) { return a < b ? swipeIdFor(a, b) : swipeIdFor(b, a); }
+    function noBlocks(a, b) {
+      return !exists(/databases/$(database)/documents/blocks/$(swipeIdFor(a,b)))
+        && !exists(/databases/$(database)/documents/blocks/$(swipeIdFor(b,a)));
+    }
+    function noBlocksAfter(a, b) {
+      return !existsAfter(/databases/$(database)/documents/blocks/$(swipeIdFor(a,b)))
+        && !existsAfter(/databases/$(database)/documents/blocks/$(swipeIdFor(b,a)));
+    }
+    function matchClosedAfterBlock(a, b) {
+      let path = /databases/$(database)/documents/matches/$(matchIdFor(a,b));
+      return !existsAfter(path) || getAfter(path).data.isActive == false;
+    }
     function mutualLikeAfter(a, b) {
       let ab = getAfter(/databases/$(database)/documents/swipes/$(swipeIdFor(a,b))).data;
       let ba = getAfter(/databases/$(database)/documents/swipes/$(swipeIdFor(b,a))).data;
@@ -169,6 +181,7 @@ service cloud.firestore {
     }
     match /discoveryCards/{uid} {
       allow get: if owner(uid) || (request.auth != null && validUid(request.auth.uid) && validUid(uid)
+        && noBlocks(request.auth.uid, uid)
         && ((reciprocal(request.auth.uid, uid)
         && resource.data == cardFields(get(/databases/$(database)/documents/users/$(uid)).data)
         && !exists(/databases/$(database)/documents/swipes/$(swipeIdFor(request.auth.uid, uid))))
@@ -193,6 +206,7 @@ service cloud.firestore {
         && swipeId == swipeIdFor(request.resource.data.fromUserId, request.resource.data.toUserId)
         && request.resource.data.type in ['like', 'pass']
         && request.resource.data.createdAt == request.time
+        && noBlocksAfter(request.auth.uid, request.resource.data.toUserId)
         && reciprocal(request.auth.uid, request.resource.data.toUserId)
         && matchingRequired(request.resource.data);
       allow update, delete: if false;
@@ -214,6 +228,7 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.users
         && matchId == matchIdFor(request.resource.data.users[0],request.resource.data.users[1])
         && request.resource.data.isActive == true && request.resource.data.createdAt == request.time
+        && noBlocksAfter(request.resource.data.users[0], request.resource.data.users[1])
         && mutualLikeAfter(request.resource.data.users[0],request.resource.data.users[1]);
       allow update: if request.auth != null && request.auth.uid in resource.data.users
         && resource.data.isActive == true && request.resource.data.isActive == false
@@ -250,6 +265,8 @@ service cloud.firestore {
         allow list: if participant()
           && request.query.limit != null && request.query.limit <= maxChatHistory();
         allow create: if participant()
+          && noBlocksAfter(get(/databases/$(database)/documents/matches/$(matchId)).data.users[0],
+            get(/databases/$(database)/documents/matches/$(matchId)).data.users[1])
           && get(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
           && getAfter(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
           && request.resource.data.keys().hasAll(['senderId','text','createdAt'])
@@ -263,6 +280,38 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time;
         allow update, delete: if false;
       }
+    }
+    match /blocks/{blockId} {
+      // Solo GET de los IDs propios, incluyendo inexistencia transaccional.
+      // El destinatario y terceros no pueden consultar este documento.
+      allow get: if request.auth != null && validUid(request.auth.uid)
+        && blockId.matches(request.auth.uid + '[.][A-Za-z0-9_-]{1,128}');
+      allow list, update, delete: if false;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['blockerId','blockedId','createdAt'])
+        && request.resource.data.keys().hasOnly(['blockerId','blockedId','createdAt'])
+        && request.resource.data.blockerId == request.auth.uid
+        && validUid(request.resource.data.blockerId) && validUid(request.resource.data.blockedId)
+        && request.resource.data.blockerId != request.resource.data.blockedId
+        && blockId == swipeIdFor(request.resource.data.blockerId,request.resource.data.blockedId)
+        && request.resource.data.createdAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.blockedId))
+        && matchClosedAfterBlock(request.auth.uid, request.resource.data.blockedId);
+    }
+    match /reports/{reportId} {
+      allow read, update, delete: if false;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['reporterId','reportedId','reason','details','createdAt','status'])
+        && request.resource.data.keys().hasOnly(['reporterId','reportedId','reason','details','createdAt','status'])
+        && request.resource.data.reporterId == request.auth.uid
+        && validUid(request.resource.data.reporterId) && validUid(request.resource.data.reportedId)
+        && request.resource.data.reporterId != request.resource.data.reportedId
+        && reportId == swipeIdFor(request.resource.data.reporterId,request.resource.data.reportedId)
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.reportedId))
+        && request.resource.data.reason in ['fake_profile','inappropriate_content','harassment','spam','other']
+        && request.resource.data.details is string && request.resource.data.details.size() <= 500
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.status == 'pending';
     }
   }
 }

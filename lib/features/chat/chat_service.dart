@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../matches/student_match.dart';
 import 'chat_message.dart';
+import '../safety/safety_models.dart';
 
 class ChatService {
   ChatService({FirebaseFirestore? firestore})
@@ -53,6 +54,13 @@ class ChatService {
       throw const ChatException(
         'Este match está inactivo. No puedes enviar mensajes.',
       );
+    }
+    final ownBlock = await _db
+        .collection('blocks')
+        .doc(SafetyIds.idFor(uid, match.otherUser(uid)))
+        .get(const GetOptions(source: Source.server));
+    if (ownBlock.exists) {
+      throw const ChatException('No puedes enviar mensajes en este chat.');
     }
     // Las reglas vuelven a comprobar pertenencia y estado al escribir,
     // incluso si el match se desactiva después de esta lectura.

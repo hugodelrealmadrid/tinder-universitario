@@ -35,6 +35,12 @@ class StudentMatch {
 
   static String idFor(String a, String b) => orderedUsers(a, b).join('.');
 
+  static Map<String, dynamic> closeFields(String uid) => {
+    'isActive': false,
+    'closedAt': FieldValue.serverTimestamp(),
+    'closedBy': uid,
+  };
+
   factory StudentMatch.fromMap(Map<String, dynamic> data) {
     if (data['isActive'] is! bool) {
       throw const FormatException('Estado de match inválido.');

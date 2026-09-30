@@ -4,6 +4,8 @@ import '../matches/student_match.dart';
 import '../matches/unmatch_service.dart';
 import 'chat_message.dart';
 import 'chat_service.dart';
+import '../safety/safety_dialog.dart';
+import '../safety/safety_service.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -13,12 +15,14 @@ class ChatScreen extends StatefulWidget {
     this.profile,
     this.service,
     this.unmatchService,
+    this.safetyService,
   });
   final String matchId, uid;
   // Ficha pública que Mis Matches ya obtuvo; nunca consultar users ajenos.
   final DiscoveryCandidate? profile;
   final ChatService? service;
   final UnmatchService? unmatchService;
+  final SafetyService? safetyService;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -45,6 +49,34 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _retry() => setState(_listen);
+
+  Future<void> _safety(String target, SafetyAction action) async {
+    if (_closing || _sending) return;
+    setState(() => _closing = true);
+    try {
+      final done = await showSafetyDialog(
+        context,
+        target: target,
+        action: action,
+        service: widget.safetyService,
+      );
+      if (!mounted || !done) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            action == SafetyAction.block
+                ? 'Usuario bloqueado. El historial se conserva.'
+                : 'Reporte enviado.',
+          ),
+        ),
+      );
+      if (action == SafetyAction.block && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) setState(() => _closing = false);
+    }
+  }
 
   Future<void> _confirmUnmatch() async {
     if (_closing || _sending) return;
@@ -128,11 +160,26 @@ class _ChatScreenState extends State<ChatScreen> {
                 key: const ValueKey('chat-options'),
                 tooltip: 'Opciones del chat',
                 enabled: !_closing && !_sending,
-                onSelected: (_) => _confirmUnmatch(),
+                onSelected: (value) => value == 'unmatch'
+                    ? _confirmUnmatch()
+                    : _safety(
+                        snapshot.data!.otherUser(widget.uid),
+                        value == 'block'
+                            ? SafetyAction.block
+                            : SafetyAction.report,
+                      ),
                 itemBuilder: (_) => [
                   const PopupMenuItem(
                     value: 'unmatch',
                     child: Text('Deshacer match'),
+                  ),
+                  const PopupMenuItem(
+                    value: 'block',
+                    child: Text('Bloquear usuario'),
+                  ),
+                  const PopupMenuItem(
+                    value: 'report',
+                    child: Text('Reportar usuario'),
                   ),
                 ],
               );

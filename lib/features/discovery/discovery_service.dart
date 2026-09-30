@@ -4,6 +4,7 @@ import '../preferences/preferences_service.dart';
 import '../profile/student_profile.dart';
 import 'discovery_models.dart';
 import '../matches/student_match.dart';
+import '../safety/safety_models.dart';
 
 class DiscoveryService {
   DiscoveryService({FirebaseFirestore? firestore})
@@ -15,6 +16,7 @@ class DiscoveryService {
   bool _exhausted = false;
   bool _cancelled = false;
   void cancel() => _cancelled = true;
+  void exclude(String uid) => _decided.add(uid);
   String? _uid;
   DiscoveryPreferences? _preferences;
   final Map<String, String> careerNames = {}, interestNames = {};
@@ -103,6 +105,11 @@ class DiscoveryService {
       final index = _pending.removeAt(0);
       if (index.id == _uid || _decided.contains(index.id)) continue;
       try {
+        final ownBlock = await _db
+            .collection('blocks')
+            .doc(SafetyIds.idFor(_uid!, index.id))
+            .get(const GetOptions(source: Source.server));
+        if (ownBlock.exists) continue;
         // Las reglas comprueban aquí AMBAS preferencias. No se leen las
         // preferencias ajenas ni se utiliza una consulta como filtro de reglas.
         final card = await _db
@@ -132,6 +139,11 @@ class DiscoveryService {
       throw const DiscoveryException('Decisión inválida.');
     }
     Future<bool> commit() => _db.runTransaction<bool>((tx) async {
+      if ((await tx.get(
+        _db.collection('blocks').doc(SafetyIds.idFor(from, to)),
+      )).exists) {
+        throw const DiscoveryException('El perfil ya no está disponible.');
+      }
       final ref = _db.collection('swipes').doc(id);
       if ((await tx.get(ref)).exists) {
         throw const DiscoveryException(

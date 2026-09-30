@@ -41,11 +41,7 @@ class UnmatchService {
       if (!pair.isActive) {
         throw const UnmatchException('Este match ya ha finalizado.');
       }
-      tx.update(ref, {
-        'isActive': false,
-        'closedAt': FieldValue.serverTimestamp(),
-        'closedBy': uid,
-      });
+      tx.update(ref, StudentMatch.closeFields(uid));
     });
   }
 }

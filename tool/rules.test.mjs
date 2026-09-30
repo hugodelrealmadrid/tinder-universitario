@@ -823,3 +823,165 @@ test('HU15 cierre simultáneo produce un único autor y timestamp inmutables',as
   await assertFails(updateDoc(doc(db(),'matches/ana.bob'),closure('ana')));
   assert.deepEqual((await getDoc(doc(db(),'matches/ana.bob'))).data(),saved);
 });
+
+// HU-16/HU-17: datos únicamente dentro del emulador demo.
+const blockData=(a='ana',b='bob')=>({blockerId:a,blockedId:b,createdAt:serverTimestamp()});
+const reportData=(a='ana',b='bob')=>({reporterId:a,reportedId:b,reason:'harassment',details:'',createdAt:serverTimestamp(),status:'pending'});
+async function blockPair(a='ana',b='bob') {
+  const store=context(a).firestore();
+  const commit=()=>runTransaction(store,async tx=>{
+    const refBlock=doc(store,`blocks/${a}.${b}`),pair=doc(store,`matches/${matchId(a,b)}`);
+    const existing=await tx.get(refBlock),current=await tx.get(pair);
+    if(current.exists()&&current.data().isActive) tx.update(pair,closure(a));
+    if(!existing.exists()) tx.set(refBlock,blockData(a,b));
+    return !existing.exists();
+  });
+  try{return await commit();}catch(error){if(error.code!=='permission-denied')throw error;return commit();}
+}
+test('HU16 bloqueo sin match, mínimo direccional y repetición idempotente',async()=>{
+  await seedDiscovery(); assert.equal(await blockPair(),true);
+  const first=(await getDoc(doc(db(),'blocks/ana.bob'))).data();
+  assert.deepEqual(Object.keys(first).sort(),['blockedId','blockerId','createdAt']);
+  assert.equal(first.blockerId,'ana');assert.equal(first.blockedId,'bob');
+  assert.equal(await blockPair(),false);
+  assert.deepEqual((await getDoc(doc(db(),'blocks/ana.bob'))).data(),first);
+  assert.equal((await getDoc(doc(context('bob').firestore(),'blocks/bob.ana'))).exists(),false);
+});
+for(const [name,id,changes] of [
+  ['self','ana.ana',{blockedId:'ana'}],['ID incorrecto','otro',{}],
+  ['actor falso','bob.ana',{blockerId:'bob',blockedId:'ana'}],
+  ['fecha falsa','ana.bob',{createdAt:Timestamp.fromMillis(0)}],
+  ['extra','ana.bob',{reason:'privado'}],['destino ausente','ana.nadie',{blockedId:'nadie'}],
+]) test('HU16 rechaza '+name,async()=>{
+  await seedDiscovery(); await assertFails(setDoc(doc(db(),'blocks/'+id),{...blockData(),...changes}));
+});
+test('HU16 terceros y anónimos no escriben bloqueo de A',async()=>{
+  await seedDiscovery();
+  await assertFails(setDoc(doc(context('carol').firestore(),'blocks/ana.bob'),blockData()));
+  await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(),'blocks/ana.bob'),blockData()));
+});
+test('HU16 inmutable y privado: sin update/delete/list ni lectura de destinatario',async()=>{
+  await seedDiscovery(); await blockPair();
+  const target=doc(db(),'blocks/ana.bob');
+  await assertFails(updateDoc(target,{blockedId:'carol'}));
+  await assertFails(setDoc(target,blockData()));await assertFails(deleteDoc(target));
+  for(const uid of ['ana','bob','carol']) await assertFails(getDocs(collection(context(uid).firestore(),'blocks')));
+  for(const uid of ['bob','carol']) await assertFails(getDoc(doc(context(uid).firestore(),'blocks/ana.bob')));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(),'blocks/ana.bob')));
+});
+test('HU16 lectura de fichas y swipes rechazados en ambas direcciones',async()=>{
+  await seedDiscovery(); await blockPair();
+  for(const [a,b] of [['ana','bob'],['bob','ana']]) {
+    const store=context(a).firestore();
+    await assertFails(getDoc(doc(store,'discoveryCards/'+b)));
+    for(const type of ['like','pass']) await assertFails(setDoc(doc(store,`swipes/${a}.${b}`),swipe(a,b,type)));
+    await assertFails(getDoc(doc(store,'users/'+b)));
+  }
+});
+test('HU16 match nuevo no se crea con dos LIKE antiguos y bloqueo',async()=>{
+  await seedMutualLikes(); await blockPair();
+  await assertFails(setDoc(doc(db(),'matches/ana.bob'),matchData()));
+});
+test('HU16 exige cierre atómico, conserva mensajes/swipes y cierre HU15',async()=>{
+  await chatMatch();await setDoc(messageRef(db()),chatMessage());
+  const original=(await getDoc(doc(db(),'matches/ana.bob'))).data();
+  await assertFails(setDoc(doc(db(),'blocks/ana.bob'),blockData()));
+  await blockPair();
+  const pair=(await getDoc(doc(db(),'matches/ana.bob'))).data();
+  assert.equal(pair.isActive,false);assert.equal(pair.closedBy,'ana');assert.ok(pair.closedAt instanceof Timestamp);
+  assert.deepEqual(pair.users,original.users);assert.deepEqual(pair.createdAt,original.createdAt);
+  for(const [a,b] of [['ana','bob'],['bob','ana']]) {
+    const store=context(a).firestore();
+    assert.equal((await getDocs(chatQuery(store))).size,1);
+    await assertSucceeds(getDoc(doc(store,`swipes/${a}.${b}`)));
+    await assertFails(setDoc(messageRef(store,'nuevo'),chatMessage(a)));
+  }
+});
+test('HU16 bloqueo de match ya cerrado conserva el cierre anterior',async()=>{
+  await chatMatch();await updateDoc(doc(db(),'matches/ana.bob'),closure('ana'));
+  const before=(await getDoc(doc(db(),'matches/ana.bob'))).data();
+  await blockPair('bob','ana');assert.deepEqual((await getDoc(doc(db(),'matches/ana.bob'))).data(),before);
+});
+for(const [a,b] of [['ana','bob'],['bob','ana']]) test('HU16 defensa mensajes con match activo inconsistente y block '+a,async()=>{
+  await chatMatch();await setDoc(messageRef(db()),chatMessage());
+  await env.withSecurityRulesDisabled(admin=>setDoc(doc(admin.firestore(),`blocks/${a}.${b}`),blockData(a,b)));
+  for(const uid of ['ana','bob']) {
+    const store=context(uid).firestore();
+    await assertFails(setDoc(messageRef(store,'nuevo'),chatMessage(uid)));
+    await assertSucceeds(getDocs(chatQuery(store)));
+  }
+});
+test('HU16 lote bloqueo más swipe/match/mensaje no elude validaciones',async()=>{
+  await seedDiscovery();let store=db(),batch=writeBatch(store);
+  batch.set(doc(store,'blocks/ana.bob'),blockData());batch.set(doc(store,'swipes/ana.bob'),swipe());
+  await assertFails(batch.commit());
+  await seedMutualLikes();batch=writeBatch(store);
+  batch.set(doc(store,'blocks/ana.bob'),blockData());batch.set(doc(store,'matches/ana.bob'),matchData());
+  await assertFails(batch.commit());
+  await setDoc(doc(store,'matches/ana.bob'),matchData());batch=writeBatch(store);
+  batch.set(doc(store,'blocks/ana.bob'),blockData());batch.update(doc(store,'matches/ana.bob'),closure('ana'));
+  batch.set(messageRef(store),chatMessage());await assertFails(batch.commit());
+});
+test('HU16 bloqueos concurrentes conservan un único cierre',async()=>{
+  await chatMatch();await Promise.all([blockPair(),blockPair('bob','ana')]);
+  const pair=(await getDoc(doc(db(),'matches/ana.bob'))).data();
+  assert.equal(pair.isActive,false);assert.ok(['ana','bob'].includes(pair.closedBy));
+  assert.ok((await getDoc(doc(db(),'blocks/ana.bob'))).exists());
+  assert.ok((await getDoc(doc(context('bob').firestore(),'blocks/bob.ana'))).exists());
+});
+test('HU17 motivos controlados y detalles opcionales, reporte no bloquea/cierra',async()=>{
+  await chatMatch();await setDoc(doc(db(),'reports/ana.bob'),reportData());
+  assert.equal((await getDoc(doc(db(),'matches/ana.bob'))).data().isActive,true);
+  assert.equal((await getDoc(doc(db(),'blocks/ana.bob'))).exists(),false);
+  await env.withSecurityRulesDisabled(async admin=>{
+    const data=(await getDoc(doc(admin.firestore(),'reports/ana.bob'))).data();
+    assert.deepEqual(Object.keys(data).sort(),['createdAt','details','reason','reportedId','reporterId','status']);
+    assert.equal(data.status,'pending');assert.equal(data.details,'');
+  });
+});
+for(const [name,id,changes] of [
+  ['self','ana.ana',{reportedId:'ana'}],['reporter falso','bob.ana',{reporterId:'bob',reportedId:'ana'}],
+  ['ID aleatorio','aleatorio',{}],['motivo','ana.bob',{reason:'libre'}],
+  ['detalles largos','ana.bob',{details:'x'.repeat(501)}],['tipo detalles','ana.bob',{details:null}],
+  ['status','ana.bob',{status:'resolved'}],['fecha','ana.bob',{createdAt:Timestamp.fromMillis(0)}],
+  ['extra','ana.bob',{email:'privado@example.com'}],['destino ausente','ana.nadie',{reportedId:'nadie'}],
+]) test('HU17 rechaza '+name,async()=>{
+  await seedDiscovery();await assertFails(setDoc(doc(db(),'reports/'+id),{...reportData(),...changes}));
+});
+test('HU17 no lectura ni mutación incluso autor; duplicado y anónimo rechazados',async()=>{
+  await seedDiscovery();await setDoc(doc(db(),'reports/ana.bob'),reportData());
+  for(const uid of ['ana','bob','carol']) {
+    const store=context(uid).firestore(),target=doc(store,'reports/ana.bob');
+    await assertFails(getDoc(target));await assertFails(getDocs(collection(store,'reports')));
+    await assertFails(updateDoc(target,{details:'cambio'}));await assertFails(deleteDoc(target));
+  }
+  await assertFails(setDoc(doc(db(),'reports/ana.bob'),reportData()));
+  await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(),'reports/bob.ana'),reportData('bob','ana')));
+});
+test('HU17 reportar y bloquear separados, reporte posterior a bloqueo permitido',async()=>{
+  await seedDiscovery();await blockPair();
+  await env.withSecurityRulesDisabled(async admin=>assert.equal((await getDocs(collection(admin.firestore(),'reports'))).size,0));
+  await assertSucceeds(setDoc(doc(db(),'reports/ana.bob'),reportData()));
+  await assertSucceeds(setDoc(doc(context('bob').firestore(),'reports/bob.ana'),{...reportData('bob','ana'),reason:'other',details:'x'.repeat(500)}));
+});
+
+
+test('HU17 acepta todos los motivos del catálogo y límite de detalles',async()=>{
+  await seedDiscovery();
+  for(const reason of ['fake_profile','inappropriate_content','harassment','spam','other']) {
+    await assertSucceeds(setDoc(doc(db(),'reports/ana.bob'),{...reportData(),reason,details:'x'.repeat(500)}));
+    await env.withSecurityRulesDisabled(admin=>deleteDoc(doc(admin.firestore(),'reports/ana.bob')));
+  }
+});
+test('HU16 controles de bloqueo conservan presupuesto de Rules con carreras distintas',async()=>{
+  await seedDiscovery();
+  await env.withSecurityRulesDisabled(async admin=>{
+    const store=admin.firestore();
+    await setDoc(doc(store,'careers/medicina'),{name:'Medicina',isActive:true});
+    await updateDoc(doc(store,'users/bob'),{careerId:'medicina'});
+    const data=(await getDoc(doc(store,'users/bob'))).data();
+    await setDoc(doc(store,'discoveryCards/bob'),projection(data));
+  });
+  await assertSucceeds(decideWithMatch('ana','bob'));
+  await assertSucceeds(decideWithMatch('bob','ana'));
+});
