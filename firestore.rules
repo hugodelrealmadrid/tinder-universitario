@@ -216,6 +216,44 @@ service cloud.firestore {
         && request.resource.data.isActive == true && request.resource.data.createdAt == request.time
         && mutualLikeAfter(request.resource.data.users[0],request.resource.data.users[1]);
       allow update, delete: if false;
+
+      match /messages/{messageId} {
+        // Mantener sincronizados con ChatLimits en Dart.
+        function maxMessageLength() { return 1000; }
+        function maxChatHistory() { return 50; }
+        function trimmedText(text) {
+          // RE2 trim() no cubre todos los espacios Unicode que Dart elimina.
+          let edge = '[\\s\\x{0085}\\x{00A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{FEFF}]';
+          return !text.matches(edge + '[\\s\\S]*|[\\s\\S]*' + edge);
+        }
+        function participant() {
+          let path = /databases/$(database)/documents/matches/$(matchId);
+          let pair = get(path).data;
+          return request.auth != null && exists(path)
+            && pair.users is list && pair.users.size() == 2
+            && validUid(pair.users[0]) && validUid(pair.users[1])
+            && pair.users[0] < pair.users[1]
+            && matchId == matchIdFor(pair.users[0],pair.users[1])
+            && pair.isActive is bool && pair.createdAt is timestamp
+            && request.auth.uid in pair.users;
+        }
+        // El historial se conserva legible al desactivar el match.
+        allow get: if participant();
+        allow list: if participant()
+          && request.query.limit != null && request.query.limit <= maxChatHistory();
+        allow create: if participant()
+          && get(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
+          && request.resource.data.keys().hasAll(['senderId','text','createdAt'])
+          && request.resource.data.keys().hasOnly(['senderId','text','createdAt'])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= maxMessageLength()
+          && trimmedText(request.resource.data.text)
+          && request.resource.data.createdAt is timestamp
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
     }
   }
 }

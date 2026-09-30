@@ -3,7 +3,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import { doc, setDoc, updateDoc, getDoc, getDocs, collection, Timestamp, serverTimestamp, query, where, limit, orderBy, documentId, writeBatch, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, deleteObject, getMetadata } from 'firebase/storage';
-import { runTransaction } from 'firebase/firestore';
+import { runTransaction, onSnapshot } from 'firebase/firestore';
 import assert from 'node:assert/strict';
 
 let env;
@@ -509,4 +509,218 @@ test('Storage valida vacío, subcarpetas y anónimos; PNG/WebP propios permitido
     await assertSucceeds(uploadBytes(item,new Uint8Array([1]),{contentType:`image/${type}`}));
     await assertSucceeds(deleteObject(item));
   }
+});
+
+// Bloque 5: fixtures exclusivamente en demo-tinder-universitario (emulador).
+async function chatMatch() {
+  await seedDiscovery();
+  await decideWithMatch('ana','bob');
+  await decideWithMatch('bob','ana');
+}
+const chatMessage = (senderId='ana', text='Hola') =>
+  ({senderId,text,createdAt:serverTimestamp()});
+const messageRef = (store, id='m1', pair='ana.bob') =>
+  doc(store,'matches/' + pair + '/messages/' + id);
+const chatQuery = store =>
+  query(collection(store,'matches/ana.bob/messages'),orderBy('createdAt','desc'),limit(50));
+
+function waitForChat(target, predicate=()=>true) {
+  let stop;
+  const promise = new Promise((resolve,reject) => {
+    const timer = setTimeout(() => {stop();reject(new Error('Listener timeout'));},15000);
+    stop = onSnapshot(target, snapshot => {
+      if (predicate(snapshot)) {clearTimeout(timer);stop();resolve(snapshot);}
+    }, error => {clearTimeout(timer);stop();reject(error);});
+  });
+  return promise;
+}
+
+for (const uid of ['ana','bob']) {
+  test('Chat: participante ' + uid + ' puede enviar campos mínimos', async()=>{
+    await chatMatch();
+    const store=context(uid).firestore();
+    await assertSucceeds(setDoc(messageRef(store),chatMessage(uid)));
+    const saved=(await getDoc(messageRef(store))).data();
+    assert.deepEqual(Object.keys(saved).sort(),['createdAt','senderId','text']);
+    assert.equal(saved.senderId,uid);
+    assert.ok(saved.createdAt instanceof Timestamp);
+  });
+}
+
+test('Chat: tercero no puede enviar aunque falsifique senderId',async()=>{
+  await chatMatch();
+  const store=context('carol').firestore();
+  await assertFails(setDoc(messageRef(store),chatMessage('carol')));
+  await assertFails(setDoc(messageRef(store),chatMessage('ana')));
+});
+
+test('Chat: tercero no puede leer un mensaje',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await assertFails(getDoc(messageRef(context('carol').firestore())));
+});
+
+test('Chat: tercero no puede listar mensajes',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await assertFails(getDocs(chatQuery(context('carol').firestore())));
+});
+
+test('Chat: tercero no puede escuchar mensajes',async()=>{
+  await chatMatch();
+  await assertFails(waitForChat(chatQuery(context('carol').firestore())));
+});
+
+test('Chat: anónimos no pueden enviar, leer ni listar',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  const store=env.unauthenticatedContext().firestore();
+  await assertFails(setDoc(messageRef(store,'anon'),chatMessage()));
+  await assertFails(getDoc(messageRef(store)));
+  await assertFails(getDocs(chatQuery(store)));
+});
+
+test('Chat: ambos participantes pueden leer y listar el historial',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  for (const uid of ['ana','bob']) {
+    const store=context(uid).firestore();
+    await assertSucceeds(getDoc(messageRef(store)));
+    assert.equal((await assertSucceeds(getDocs(chatQuery(store)))).size,1);
+  }
+});
+
+test('Chat: senderId distinto de auth.uid rechazado',async()=>{
+  await chatMatch();
+  await assertFails(setDoc(messageRef(db()),chatMessage('bob')));
+});
+
+test('Chat: texto vacío rechazado',async()=>{
+  await chatMatch();
+  await assertFails(setDoc(messageRef(db()),chatMessage('ana','')));
+});
+
+test('Chat: espacios, saltos de línea vacíos y texto sin trim rechazados',async()=>{
+  await chatMatch();
+  for (const text of ['   ','\t\n','\u00a0','\u0085','\u1680','\u2000','\u2028','\u2029','\u202f','\u205f','\u3000','\ufeff',' Hola','Hola ','\nHola\n','\u00a0Hola','Hola\u00a0']) {
+    await assertFails(setDoc(messageRef(db()),chatMessage('ana',text)));
+  }
+  await assertSucceeds(setDoc(messageRef(db()),chatMessage('ana','Hola\n¿Cómo estás?')));
+});
+
+test('Chat: más de 1000 caracteres rechazado, incluidos Unicode',async()=>{
+  await chatMatch();
+  for (const text of ['x'.repeat(1001),'😀'.repeat(501)]) {
+    await assertFails(setDoc(messageRef(db()),chatMessage('ana',text)));
+  }
+});
+
+test('Chat: límite exacto de 1000 unidades UTF-16 ASCII y Unicode permitido',async()=>{
+  await chatMatch();
+  for (const [id,text] of [['ascii','x'.repeat(1000)],['unicode','😀'.repeat(500)],['acentos','á'.repeat(1000)]]) {
+    await assertSucceeds(setDoc(messageRef(db(),id),chatMessage('ana',text)));
+  }
+});
+
+test('Chat: campos extra y datos de perfil rechazados',async()=>{
+  await chatMatch();
+  for (const extra of [{receiverId:'bob'},{email:'ana@example.com'},{name:'Ana'},
+    {photo:'https://example.test/p.jpg'},{extra:true}]) {
+    await assertFails(setDoc(messageRef(db()),{...chatMessage(),...extra}));
+  }
+});
+
+test('Chat: timestamp cliente, nulo o de tipo inválido rechazado',async()=>{
+  await chatMatch();
+  for (const createdAt of [Timestamp.fromMillis(0),null,'ahora',1]) {
+    await assertFails(setDoc(messageRef(db()),{...chatMessage(),createdAt}));
+  }
+});
+
+test('Chat: todos los campos son obligatorios y text debe ser string',async()=>{
+  await chatMatch();
+  for (const field of ['senderId','text','createdAt']) {
+    const value=chatMessage(); delete value[field];
+    await assertFails(setDoc(messageRef(db()),value));
+  }
+  for (const text of [null,0,true,['hola'],{body:'hola'}]) {
+    await assertFails(setDoc(messageRef(db()),chatMessage('ana',text)));
+  }
+});
+
+test('Chat: UPDATE rechazado incluso para el autor',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await assertFails(updateDoc(messageRef(db()),{text:'editado'}));
+  await assertFails(setDoc(messageRef(db()),chatMessage('ana','sobrescrito')));
+});
+
+test('Chat: DELETE rechazado incluso para el autor',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await assertFails(deleteDoc(messageRef(db())));
+});
+
+test('Chat: sin match padre no se puede enviar ni leer mensajes huérfanos',async()=>{
+  await assertFails(setDoc(messageRef(db()),chatMessage()));
+  await env.withSecurityRulesDisabled(admin=>setDoc(messageRef(admin.firestore()),chatMessage()));
+  await assertFails(getDoc(messageRef(db())));
+  await assertFails(getDocs(chatQuery(db())));
+});
+
+test('Chat: match inactivo bloquea mensajes nuevos y conserva historial privado',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  // Solo fixture local; ningún cliente recibe permiso de cambiar matches.
+  await env.withSecurityRulesDisabled(admin=>
+    updateDoc(doc(admin.firestore(),'matches/ana.bob'),{isActive:false}));
+  for (const uid of ['ana','bob']) {
+    const store=context(uid).firestore();
+    await assertFails(setDoc(messageRef(store,'nuevo'),chatMessage(uid)));
+    await assertSucceeds(getDoc(messageRef(store)));
+    await assertSucceeds(getDocs(chatQuery(store)));
+  }
+  await assertFails(getDocs(chatQuery(context('carol').firestore())));
+});
+
+test('Chat: padre inválido no habilita acceso por contener un UID',async()=>{
+  for (const users of [['ana'],['ana','bob','carol'],['bob','ana'],['ana','ana']]) {
+    await env.withSecurityRulesDisabled(admin=>
+      setDoc(doc(admin.firestore(),'matches/ana.bob'),{...matchData(),users}));
+    await assertFails(setDoc(messageRef(db()),chatMessage()));
+    await assertFails(getDocs(chatQuery(db())));
+  }
+});
+
+test('Chat: consulta exige límite de hasta 50 y recupera solo los últimos',async()=>{
+  await chatMatch();
+  await env.withSecurityRulesDisabled(async admin=>{
+    const batch=writeBatch(admin.firestore());
+    for (let i=1;i<=55;i++) {
+      batch.set(messageRef(admin.firestore(),'m'+i),
+        {...chatMessage(),text:'Mensaje '+i,createdAt:Timestamp.fromMillis(i)});
+    }
+    await batch.commit();
+  });
+  const store=db();
+  await assertFails(getDocs(collection(store,'matches/ana.bob/messages')));
+  await assertFails(getDocs(query(collection(store,'matches/ana.bob/messages'),limit(51))));
+  const rows=(await assertSucceeds(getDocs(chatQuery(store)))).docs;
+  assert.equal(rows.length,50);
+  assert.equal(rows[0].data().text,'Mensaje 55');
+  assert.equal(rows[49].data().text,'Mensaje 6');
+});
+
+test('Chat: listener recibe respuesta de B y una nueva sesión recupera historial',async()=>{
+  await chatMatch();
+  await assertSucceeds(waitForChat(chatQuery(db()),snapshot=>snapshot.empty));
+  const response=waitForChat(chatQuery(db()),snapshot=>
+    snapshot.docs.some(row=>row.data().text==='Respuesta en vivo'));
+  await setDoc(messageRef(context('bob').firestore()),chatMessage('bob','Respuesta en vivo'));
+  await assertSucceeds(response);
+  const reopened=env.authenticatedContext('ana',{email:'ana@example.com'}).firestore();
+  const rows=await assertSucceeds(getDocs(chatQuery(reopened)));
+  assert.equal(rows.docs[0].data().text,'Respuesta en vivo');
+});
+
+test('Chat: el listener conserva lectura al desactivar y rechaza nuevas escrituras',async()=>{
+  await chatMatch();
+  await setDoc(messageRef(db()),chatMessage());
+  await env.withSecurityRulesDisabled(admin=>
+    updateDoc(doc(admin.firestore(),'matches/ana.bob'),{isActive:false}));
+  await assertSucceeds(waitForChat(chatQuery(db()),snapshot=>snapshot.size===1));
+  await assertFails(setDoc(messageRef(db(),'posterior'),chatMessage()));
 });
