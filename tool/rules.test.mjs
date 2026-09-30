@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+// HU-15 se prueba al final de esta suite, sin operaciones sobre Firebase remoto.
 import { test, before, after, beforeEach } from 'node:test';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import { doc, setDoc, updateDoc, getDoc, getDocs, collection, Timestamp, serverTimestamp, query, where, limit, orderBy, documentId, writeBatch, deleteDoc } from 'firebase/firestore';
@@ -664,7 +665,7 @@ test('Chat: sin match padre no se puede enviar ni leer mensajes huérfanos',asyn
 
 test('Chat: match inactivo bloquea mensajes nuevos y conserva historial privado',async()=>{
   await chatMatch(); await setDoc(messageRef(db()),chatMessage());
-  // Solo fixture local; ningún cliente recibe permiso de cambiar matches.
+  // Fixture local de estado inactivo legado; HU-15 prueba el cierre completo al final.
   await env.withSecurityRulesDisabled(admin=>
     updateDoc(doc(admin.firestore(),'matches/ana.bob'),{isActive:false}));
   for (const uid of ['ana','bob']) {
@@ -723,4 +724,102 @@ test('Chat: el listener conserva lectura al desactivar y rechaza nuevas escritur
     updateDoc(doc(admin.firestore(),'matches/ana.bob'),{isActive:false}));
   await assertSucceeds(waitForChat(chatQuery(db()),snapshot=>snapshot.size===1));
   await assertFails(setDoc(messageRef(db(),'posterior'),chatMessage()));
+});
+
+const closure = uid => ({isActive:false,closedBy:uid,closedAt:serverTimestamp()});
+for (const uid of ['ana','bob']) {
+  test('HU15 participante '+uid+' cierra conservando users y createdAt',async()=>{
+    await chatMatch();
+    const target=doc(context(uid).firestore(),'matches/ana.bob');
+    const before=(await getDoc(target)).data();
+    await assertSucceeds(updateDoc(target,closure(uid)));
+    const saved=(await getDoc(target)).data();
+    assert.equal(saved.isActive,false); assert.equal(saved.closedBy,uid);
+    assert.ok(saved.closedAt instanceof Timestamp);
+    assert.deepEqual(saved.users,before.users); assert.deepEqual(saved.createdAt,before.createdAt);
+    assert.deepEqual(Object.keys(saved).sort(),['closedAt','closedBy','createdAt','isActive','users']);
+  });
+}
+for (const uid of ['carol',null]) {
+  test('HU15 cierre rechazado para '+uid,async()=>{
+    await chatMatch();
+    const store=uid ? context(uid).firestore() : env.unauthenticatedContext().firestore();
+    await assertFails(updateDoc(doc(store,'matches/ana.bob'),closure(uid??'ana')));
+  });
+}
+for (const [name,changes] of [
+  ['true a true',{isActive:true}],
+  ['users',{users:['ana','carol']}],
+  ['createdAt',{createdAt:Timestamp.fromMillis(0)}],
+  ['closedBy ajeno',{closedBy:'bob'}],
+  ['closedAt falso',{closedAt:Timestamp.fromMillis(0)}],
+  ['campo extra',{extra:true}],
+]) {
+  test('HU15 rechazo de '+name,async()=>{
+    await chatMatch();
+    await assertFails(updateDoc(doc(db(),'matches/ana.bob'),{...closure('ana'),...changes}));
+    assert.equal((await getDoc(doc(db(),'matches/ana.bob'))).data().isActive,true);
+  });
+}
+for (const [name,changes] of [
+  ['reactivar',{isActive:true}],
+  ['cerrar nuevamente',closure('bob')],
+  ['cambiar autor',{closedBy:'bob'}],
+  ['cambiar fecha',{closedAt:serverTimestamp()}],
+]) {
+  test('HU15 cerrado no permite '+name,async()=>{
+    await chatMatch();
+    const target=doc(db(),'matches/ana.bob');
+    await updateDoc(target,closure('ana'));
+    const before=(await getDoc(target)).data();
+    await assertFails(updateDoc(target,changes));
+    assert.deepEqual((await getDoc(target)).data(),before);
+  });
+}
+test('HU15 DELETE sigue prohibido incluso después de cierre',async()=>{
+  await chatMatch(); const target=doc(db(),'matches/ana.bob');
+  await updateDoc(target,closure('ana'));
+  await assertFails(deleteDoc(target));
+});
+test('HU15 preserva historial privado y swipes, impide mensajes nuevos de ambos',async()=>{
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  const before=(await getDoc(messageRef(db()))).data();
+  await updateDoc(doc(db(),'matches/ana.bob'),closure('ana'));
+  for (const uid of ['ana','bob']) {
+    const store=context(uid).firestore();
+    const history=await assertSucceeds(getDocs(chatQuery(store)));
+    assert.equal(history.size,1); assert.deepEqual(history.docs[0].data(),before);
+    await assertFails(setDoc(messageRef(store,'nuevo'),chatMessage(uid)));
+    await assertSucceeds(getDoc(doc(store,'swipes/'+uid+'.'+(uid==='ana'?'bob':'ana'))));
+  }
+  await assertFails(getDocs(chatQuery(context('carol').firestore())));
+});
+test('HU15 lote no puede cerrar y enviar mensaje en el mismo commit',async()=>{
+  await chatMatch(); const store=db(); const batch=writeBatch(store);
+  batch.update(doc(store,'matches/ana.bob'),closure('ana'));
+  batch.set(messageRef(store),chatMessage());
+  await assertFails(batch.commit());
+  assert.equal((await getDoc(doc(store,'matches/ana.bob'))).data().isActive,true);
+});
+test('HU15 cierre simultáneo produce un único autor y timestamp inmutables',async()=>{
+  await chatMatch();
+  let arrivals=0,release;
+  const ready=new Promise(resolve=>{release=resolve;});
+  const close=uid=>{
+    const store=context(uid).firestore(); let first=true;
+    return runTransaction(store,async tx=>{
+      const target=doc(store,'matches/ana.bob');
+      const pair=await tx.get(target);
+      if(!pair.data().isActive) throw new Error('Ya cerrado');
+      if(first){first=false;if(++arrivals===2)release();await ready;}
+      tx.update(target,closure(uid));
+    });
+  };
+  const result=await Promise.allSettled([close('ana'),close('bob')]);
+  assert.equal(result.filter(value=>value.status==='fulfilled').length,1);
+  const saved=(await getDoc(doc(db(),'matches/ana.bob'))).data();
+  assert.equal(saved.isActive,false); assert.ok(['ana','bob'].includes(saved.closedBy));
+  assert.ok(saved.closedAt instanceof Timestamp); assert.deepEqual(saved.users,['ana','bob']);
+  await assertFails(updateDoc(doc(db(),'matches/ana.bob'),closure('ana')));
+  assert.deepEqual((await getDoc(doc(db(),'matches/ana.bob'))).data(),saved);
 });

@@ -215,7 +215,15 @@ service cloud.firestore {
         && matchId == matchIdFor(request.resource.data.users[0],request.resource.data.users[1])
         && request.resource.data.isActive == true && request.resource.data.createdAt == request.time
         && mutualLikeAfter(request.resource.data.users[0],request.resource.data.users[1]);
-      allow update, delete: if false;
+      allow update: if request.auth != null && request.auth.uid in resource.data.users
+        && resource.data.isActive == true && request.resource.data.isActive == false
+        && request.resource.data.keys().hasAll(['users','createdAt','isActive','closedAt','closedBy'])
+        && request.resource.data.keys().hasOnly(['users','createdAt','isActive','closedAt','closedBy'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isActive','closedAt','closedBy'])
+        && !resource.data.keys().hasAny(['closedAt','closedBy'])
+        && request.resource.data.closedBy == request.auth.uid
+        && request.resource.data.closedAt == request.time;
+      allow delete: if false;
 
       match /messages/{messageId} {
         // Mantener sincronizados con ChatLimits en Dart.
@@ -243,6 +251,7 @@ service cloud.firestore {
           && request.query.limit != null && request.query.limit <= maxChatHistory();
         allow create: if participant()
           && get(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
+          && getAfter(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
           && request.resource.data.keys().hasAll(['senderId','text','createdAt'])
           && request.resource.data.keys().hasOnly(['senderId','text','createdAt'])
           && request.resource.data.senderId == request.auth.uid

@@ -14,13 +14,27 @@ class MatchesService {
     : _db = firestore ?? FirebaseFirestore.instance;
   final FirebaseFirestore _db;
 
+  Stream<Set<String>> watchActiveIds(String uid) => _db
+      .collection('matches')
+      .where('users', arrayContains: uid)
+      .snapshots()
+      .map(
+        (snapshot) => snapshot.docs
+            .where((doc) => doc.data()['isActive'] == true)
+            .map((doc) => doc.id)
+            .toSet(),
+      );
+
   Future<List<MatchEntry>> load(String uid) async {
     final snapshot = await _db
         .collection('matches')
         .where('users', arrayContains: uid)
         .get(const GetOptions(source: Source.server));
     final matches =
-        snapshot.docs.map((doc) => StudentMatch.fromMap(doc.data())).toList()
+        snapshot.docs
+            .where((doc) => doc.data()['isActive'] == true)
+            .map((doc) => StudentMatch.fromMap(doc.data()))
+            .toList()
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     // Orden local: consulta simple con índice array automático, sin compuesto.
     final careers = <String, String>{};

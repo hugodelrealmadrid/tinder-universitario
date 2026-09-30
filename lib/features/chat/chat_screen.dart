@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../discovery/discovery_models.dart';
 import '../matches/student_match.dart';
+import '../matches/unmatch_service.dart';
 import 'chat_message.dart';
 import 'chat_service.dart';
 
@@ -11,11 +12,13 @@ class ChatScreen extends StatefulWidget {
     required this.uid,
     this.profile,
     this.service,
+    this.unmatchService,
   });
   final String matchId, uid;
   // Ficha pública que Mis Matches ya obtuvo; nunca consultar users ajenos.
   final DiscoveryCandidate? profile;
   final ChatService? service;
+  final UnmatchService? unmatchService;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -27,6 +30,7 @@ class _ChatScreenState extends State<ChatScreen> {
   late Stream<List<ChatMessage>> _messages;
   final _draft = TextEditingController();
   bool _sending = false;
+  bool _closing = false;
   String? _sendError;
 
   @override
@@ -42,8 +46,52 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _retry() => setState(_listen);
 
+  Future<void> _confirmUnmatch() async {
+    if (_closing || _sending) return;
+    setState(() => _closing = true);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('¿Deshacer match?'),
+          content: const Text(
+            'Ya no podrán enviarse mensajes nuevos. El historial se conservará.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-unmatch'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Deshacer match'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await (widget.unmatchService ?? UnmatchService()).unmatch(widget.matchId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Match finalizado. El historial se conserva.'),
+        ),
+      );
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(unmatchError(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _closing = false);
+    }
+  }
+
   Future<void> _send() async {
-    if (_sending) return;
+    if (_sending || _closing) return;
     setState(() {
       _sending = true;
       _sendError = null;
@@ -69,6 +117,28 @@ class _ChatScreenState extends State<ChatScreen> {
     final profile = widget.profile;
     return Scaffold(
       appBar: AppBar(
+        actions: [
+          StreamBuilder<StudentMatch>(
+            stream: _match,
+            builder: (context, snapshot) {
+              if (snapshot.hasError || snapshot.data?.isActive != true) {
+                return const SizedBox.shrink();
+              }
+              return PopupMenuButton<String>(
+                key: const ValueKey('chat-options'),
+                tooltip: 'Opciones del chat',
+                enabled: !_closing && !_sending,
+                onSelected: (_) => _confirmUnmatch(),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'unmatch',
+                    child: Text('Deshacer match'),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
         leading: BackButton(onPressed: () => Navigator.of(context).pop()),
         title: Row(
           children: [
@@ -163,7 +233,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       const Padding(
                         padding: EdgeInsets.all(12),
                         child: Text(
-                          'Este match está inactivo. Puedes consultar el historial.',
+                          'Este match ha finalizado. Ya no puedes enviar mensajes. Puedes consultar el historial.',
                         ),
                       ),
                     if (_sendError != null)
@@ -188,7 +258,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: TextField(
                               key: const ValueKey('chat-draft'),
                               controller: _draft,
-                              enabled: active && !_sending,
+                              enabled: active && !_sending && !_closing,
                               minLines: 1,
                               maxLines: 4,
                               textCapitalization: TextCapitalization.sentences,
@@ -207,7 +277,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: IconButton.filled(
                               key: const ValueKey('chat-send'),
                               tooltip: _sending ? 'Enviando' : 'Enviar',
-                              onPressed: active && !_sending ? _send : null,
+                              onPressed: active && !_sending && !_closing
+                                  ? _send
+                                  : null,
                               icon: _sending
                                   ? const SizedBox(
                                       width: 20,

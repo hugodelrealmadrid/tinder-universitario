@@ -25,7 +25,8 @@ class ChatService {
   Stream<StudentMatch> watchMatch(String matchId, String uid) => _db
       .collection('matches')
       .doc(matchId)
-      .snapshots()
+      .snapshots(includeMetadataChanges: true)
+      .where((snapshot) => !snapshot.metadata.hasPendingWrites)
       .map((snapshot) => _participant(snapshot, uid));
 
   Stream<List<ChatMessage>> watchMessages(String matchId) => _db

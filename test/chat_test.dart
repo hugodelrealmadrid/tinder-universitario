@@ -162,7 +162,11 @@ void main() {
 
   test('Match inactivo bloquea envío y conserva historial', () async {
     await seedMessage(1);
-    await db.doc('matches/ana.bob').update({'isActive': false});
+    await db.doc('matches/ana.bob').update({
+      'isActive': false,
+      'closedAt': Timestamp.now(),
+      'closedBy': 'ana',
+    });
     await expectLater(
       service.send('ana.bob', 'ana', 'No'),
       throwsA(isA<ChatException>()),
@@ -326,7 +330,11 @@ void main() {
     (tester) async {
       await seedMessage(1);
       await open(tester);
-      await db.doc('matches/ana.bob').update({'isActive': false});
+      await db.doc('matches/ana.bob').update({
+        'isActive': false,
+        'closedAt': Timestamp.now(),
+        'closedBy': 'ana',
+      });
       await tester.pumpAndSettle();
       expect(find.text('Mensaje 1'), findsOneWidget);
       expect(
