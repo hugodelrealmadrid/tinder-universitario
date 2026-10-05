@@ -1,3 +1,5 @@
+import '../../theme/app_theme.dart';
+import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import '../auth/auth_service.dart' show firebaseError;
@@ -122,9 +124,11 @@ class _MatchesScreenState extends State<MatchesScreen> {
                   ),
                 )
               : _visible.isEmpty
-              ? const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('Todavía no tienes matches.'),
+              ? const AppEmptyState(
+                  icon: Icons.favorite_border_rounded,
+                  title: 'Todavía no tienes matches.',
+                  message:
+                      'Las conexiones empiezan con un me gusta. Explora Descubrir y encuentra personas con quienes conectar.',
                 )
               : RefreshIndicator(
                   onRefresh: _load,
@@ -173,28 +177,19 @@ class MatchTile extends StatelessWidget {
     return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppTheme.radius),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 72,
-                height: 90,
-                child: profile == null
-                    ? const Icon(Icons.person_outline, size: 48)
-                    : ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.network(
-                          profile.mainPhotoUrl,
-                          fit: BoxFit.cover,
-                          webHtmlElementStrategy:
-                              WebHtmlElementStrategy.fallback,
-                          errorBuilder: (context, error, stack) =>
-                              const Icon(Icons.image_not_supported_outlined),
-                        ),
-                      ),
+                width: 84,
+                height: 104,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: AppPhoto(url: profile?.mainPhotoUrl),
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -207,11 +202,29 @@ class MatchTile extends StatelessWidget {
                           : '${profile.firstName}, ${profile.age}',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(
                       profile == null
                           ? 'Este match se conserva.'
                           : entry.careerName ?? 'Carrera no disponible',
+                    ),
+                    const SizedBox(height: 12),
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.chat_bubble_outline_rounded,
+                          size: 16,
+                          color: AppColors.coral,
+                        ),
+                        SizedBox(width: 6),
+                        Text(
+                          'Abrir chat',
+                          style: TextStyle(
+                            color: AppColors.coral,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

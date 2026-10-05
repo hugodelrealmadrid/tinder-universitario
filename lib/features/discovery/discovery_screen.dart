@@ -1,3 +1,5 @@
+import '../../theme/app_theme.dart';
+import '../../widgets/app_ui.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart' show firebaseError;
@@ -174,10 +176,49 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         ),
       ],
     ),
+    bottomNavigationBar: !_loading && _candidate != null
+        ? SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _DecisionButton(
+                        key: const ValueKey('pass-button'),
+                        label: 'PASS',
+                        icon: Icons.close_rounded,
+                        color: AppColors.danger,
+                        onPressed: _deciding
+                            ? null
+                            : () => _decide(SwipeDecision.pass),
+                      ),
+                      const SizedBox(width: 40),
+                      _DecisionButton(
+                        key: const ValueKey('like-button'),
+                        label: 'LIKE',
+                        icon: Icons.favorite_rounded,
+                        color: AppColors.green,
+                        onPressed: _deciding
+                            ? null
+                            : () => _decide(SwipeDecision.like),
+                      ),
+                    ],
+                  ),
+                  if (_deciding && !_safetyOpen)
+                    const LinearProgressIndicator(),
+                ],
+              ),
+            ),
+          )
+        : null,
     body: SafeArea(
       child: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
             child: Column(
@@ -189,27 +230,15 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                     padding: EdgeInsets.all(32),
                     child: Center(child: CircularProgressIndicator()),
                   ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                if (_notice != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Text(_notice!),
-                  ),
+                if (_error != null) AppNotice(_error!, error: true),
+                if (_notice != null) AppNotice(_notice!),
                 if (!_loading && _candidate != null) ...[
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: PopupMenuButton<SafetyAction>(
+                  CandidateView(
+                    candidate: _candidate!,
+                    menu: PopupMenuButton<SafetyAction>(
                       key: const ValueKey('discovery-options'),
                       tooltip: 'Opciones del perfil',
+                      iconColor: Colors.white,
                       enabled: !_deciding,
                       onSelected: _safety,
                       itemBuilder: (_) => const [
@@ -223,9 +252,6 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                         ),
                       ],
                     ),
-                  ),
-                  CandidateView(
-                    candidate: _candidate!,
                     careerName:
                         _service.careerNames[_candidate!.careerId] ??
                         'Carrera no disponible',
@@ -234,47 +260,13 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
                         .map((id) => _service.interestNames[id]!)
                         .toList(),
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          key: const ValueKey('pass-button'),
-                          onPressed: _deciding
-                              ? null
-                              : () => _decide(SwipeDecision.pass),
-                          icon: const Icon(Icons.close),
-                          label: const Text('PASS'),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: FilledButton.icon(
-                          key: const ValueKey('like-button'),
-                          onPressed: _deciding
-                              ? null
-                              : () => _decide(SwipeDecision.like),
-                          icon: const Icon(Icons.favorite),
-                          label: const Text('LIKE'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_deciding && !_safetyOpen)
-                    const LinearProgressIndicator(),
                 ],
                 if (!_loading && _candidate == null && _error == null) ...[
-                  const Icon(Icons.people_outline, size: 64),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'No hay más perfiles compatibles por ahora.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 22),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Puedes revisar tus preferencias o volver más tarde. Las decisiones anteriores se conservan.',
-                    textAlign: TextAlign.center,
+                  const AppEmptyState(
+                    icon: Icons.explore_outlined,
+                    title: 'No hay más perfiles compatibles por ahora.',
+                    message:
+                        'Puedes revisar tus preferencias o volver más tarde. Las decisiones anteriores se conservan.',
                   ),
                 ],
                 const SizedBox(height: 16),
@@ -314,54 +306,198 @@ class CandidateView extends StatelessWidget {
     required this.candidate,
     required this.careerName,
     required this.interests,
+    this.menu,
   });
   final DiscoveryCandidate candidate;
   final String careerName;
   final List<String> interests;
+  final Widget? menu;
   @override
   Widget build(BuildContext context) => Card(
     clipBehavior: Clip.antiAlias,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AspectRatio(
-          aspectRatio: 4 / 5,
-          child: Image.network(
-            candidate.mainPhotoUrl,
-            fit: BoxFit.cover,
-            webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
-            errorBuilder: (context, error, stack) => const Center(
-              child: Icon(Icons.image_not_supported_outlined, size: 64),
+        Stack(
+          children: [
+            Positioned.fill(child: AppPhoto(url: candidate.mainPhotoUrl)),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: .08),
+                      Colors.black.withValues(alpha: .12),
+                      Colors.black.withValues(alpha: .9),
+                    ],
+                    stops: const [0, .35, 1],
+                  ),
+                ),
+              ),
+            ),
+            Container(
+              constraints: const BoxConstraints(minHeight: 400),
+              padding: const EdgeInsets.fromLTRB(22, 230, 22, 24),
+              alignment: Alignment.bottomLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${candidate.firstName}, ${candidate.age}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 32,
+                      height: 1.15,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -.8,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.school_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          careerName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (interests.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: interests
+                          .map(
+                            (name) => Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: .35),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: .4),
+                                ),
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              child: Text(
+                                name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (menu != null)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Material(
+                  color: Colors.black.withValues(alpha: .35),
+                  shape: const CircleBorder(),
+                  child: menu!,
+                ),
+              ),
+          ],
+        ),
+        if (candidate.description.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'UN POCO SOBRE MÍ',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.5,
+                    color: AppColors.muted,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(candidate.description),
+              ],
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${candidate.firstName}, ${candidate.age}',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 8),
-              Text(careerName),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                children: interests
-                    .map((name) => Chip(label: Text(name)))
-                    .toList(),
-              ),
-              if (candidate.description.trim().isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(candidate.description),
-                ),
-            ],
-          ),
-        ),
       ],
     ),
+  );
+}
+
+class _DecisionButton extends StatelessWidget {
+  const _DecisionButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onPressed,
+  });
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onPressed;
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      Container(
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Color(0x12000000),
+              blurRadius: 16,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: IconButton.filledTonal(
+          tooltip: label == 'LIKE' ? 'Me gusta · LIKE' : 'Pasar · PASS',
+          onPressed: onPressed,
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: color,
+            disabledBackgroundColor: AppColors.background,
+            minimumSize: const Size(72, 72),
+            iconSize: 34,
+          ),
+          icon: Icon(icon),
+        ),
+      ),
+      const SizedBox(height: 8),
+      Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.2,
+        ),
+      ),
+    ],
   );
 }

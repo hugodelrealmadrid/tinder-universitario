@@ -8,6 +8,14 @@ import 'package:tinder_universitario/features/auth/auth_gate.dart';
 import 'package:tinder_universitario/features/auth/auth_service.dart';
 
 class TestUser implements User {
+  TestUser({this.verified = false});
+  final bool verified;
+  @override
+  bool get emailVerified => verified;
+  @override
+  Future<void> sendEmailVerification([
+    ActionCodeSettings? actionCodeSettings,
+  ]) async {}
   @override
   String get uid => 'ana';
   @override
@@ -29,6 +37,10 @@ class LocalAuth implements FirebaseAuth {
   int registrations = 0, logins = 0, logouts = 0;
   String? lastEmail;
   bool failLogin = false;
+  @override
+  User? get currentUser => current;
+  @override
+  Stream<User?> userChanges() => authStateChanges();
   @override
   Stream<User?> authStateChanges() async* {
     yield current;
@@ -155,6 +167,8 @@ void main() {
         DateTime(2000),
       );
       await service.ensureProfile(TestUser());
+      // Este test conserva la regresión de entrada normal con cuenta verificada.
+      auth.current = TestUser(verified: true);
       await tester.pumpWidget(MaterialApp(home: AuthGate(service: service)));
       await tester.pumpAndSettle();
       expect(find.text('Univalle · Cochabamba'), findsOneWidget);

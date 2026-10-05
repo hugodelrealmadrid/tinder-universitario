@@ -1,3 +1,4 @@
+import '../../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'safety_models.dart';
 import 'safety_service.dart';
@@ -69,6 +70,10 @@ class _SafetyDialogState extends State<SafetyDialog> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_busy,
     child: AlertDialog(
+      icon: Icon(
+        _block ? Icons.block_rounded : Icons.flag_outlined,
+        color: _block ? AppColors.danger : AppColors.blue,
+      ),
       title: Text(_block ? '¿Bloquear usuario?' : 'Reportar usuario'),
       content: SizedBox(
         width: 420,
@@ -146,6 +151,9 @@ class _SafetyDialogState extends State<SafetyDialog> {
         ),
         FilledButton(
           key: const ValueKey('safety-submit'),
+          style: FilledButton.styleFrom(
+            backgroundColor: _block ? AppColors.danger : AppColors.coral,
+          ),
           onPressed: _busy ? null : _submit,
           child: Text(_block ? 'Bloquear' : 'Enviar reporte'),
         ),

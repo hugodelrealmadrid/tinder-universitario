@@ -1,3 +1,4 @@
+import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../profile/profile_screen.dart';
@@ -51,15 +52,20 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(
-                              Icons.favorite,
-                              size: 64,
-                              color: Color(0xFFE94057),
+                            const AppMark(size: 88),
+                            const SizedBox(height: 24),
+                            Text(
+                              'Personas reales.\nConexiones que cuentan.',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                              textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 20),
                             const Text(
                               'Univalle · Cochabamba',
-                              style: TextStyle(fontSize: 26),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 12),
@@ -101,18 +107,22 @@ class _HomeScreenState extends State<HomeScreen> {
               destinations: const [
                 NavigationDestination(
                   icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home_rounded),
                   label: 'Inicio',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.people_outline),
+                  icon: Icon(Icons.explore_outlined),
+                  selectedIcon: Icon(Icons.explore_rounded),
                   label: 'Descubrir',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.favorite_outline),
+                  selectedIcon: Icon(Icons.favorite_rounded),
                   label: 'Matches',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person_rounded),
                   label: 'Perfil',
                 ),
               ],

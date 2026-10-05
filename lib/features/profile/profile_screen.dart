@@ -1,3 +1,6 @@
+import '../../theme/app_theme.dart';
+import '../../widgets/app_ui.dart';
+import '../preferences/discovery_preferences.dart' show ageOn;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,6 +25,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   late final ProfileService _service = widget.service ?? ProfileService();
   final _form = GlobalKey<FormState>();
+  final _editSection = GlobalKey();
   final _first = TextEditingController();
   final _last = TextEditingController();
   String? _gender;
@@ -190,6 +194,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        icon: const Icon(Icons.delete_outline, color: AppColors.danger),
         title: const Text('Eliminar fotografía'),
         content: const Text(
           'Se eliminará del perfil y de Storage. Si es la última, el perfil quedará inactivo.',
@@ -201,6 +206,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             child: const Text('Eliminar'),
           ),
         ],
@@ -239,7 +245,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             )
           : Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 900),
+                constraints: const BoxConstraints(maxWidth: 680),
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
                   child: Form(
@@ -247,6 +253,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        _overview(),
+                        const SizedBox(height: 16),
                         Text(
                           _profile!.email,
                           style: Theme.of(context).textTheme.titleMedium,
@@ -263,6 +271,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             ),
                             Chip(
+                              avatar: Icon(
+                                _profile!.isActive
+                                    ? Icons.check_circle_outline
+                                    : Icons.pause_circle_outline,
+                                color: _profile!.isActive
+                                    ? AppColors.green
+                                    : AppColors.muted,
+                              ),
                               label: Text(
                                 _profile!.isActive &&
                                         !ProfileGender.isValid(_profile!.gender)
@@ -284,21 +300,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const SizedBox(height: 16),
                         if (_busy) const LinearProgressIndicator(),
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(
-                              _error!,
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                            ),
-                          ),
-                        if (_notice != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(_notice!, semanticsLabel: _notice),
-                          ),
+                        if (_error != null) AppNotice(_error!, error: true),
+                        if (_notice != null) AppNotice(_notice!),
+                        SectionHeading(
+                          'Tus datos',
+                          key: _editSection,
+                          icon: Icons.person_outline,
+                          subtitle: 'Así te conocerán',
+                        ),
                         _text(_first, 'Nombre *', 80),
                         _text(_last, 'Apellido *', 80),
                         OutlinedButton.icon(
@@ -373,6 +382,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             'El género anterior no es válido. Elige una opción y guarda el perfil; no se cambiará automáticamente.',
                           ),
                         const SizedBox(height: 16),
+                        const SectionHeading(
+                          'Sobre ti',
+                          icon: Icons.auto_awesome_outlined,
+                          subtitle: 'Comparte lo que te hace único',
+                        ),
                         _text(
                           _description,
                           'Descripción',
@@ -413,9 +427,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             'No hay carreras activas disponibles. Debe cargarse el catálogo en Firestore. Puedes guardar el resto del perfil.',
                           ),
                         const SizedBox(height: 24),
-                        Text(
+                        SectionHeading(
                           'Intereses (${_selectedInterests.length}/$maxInterests)',
-                          style: Theme.of(context).textTheme.titleLarge,
+                          icon: Icons.local_activity_outlined,
                         ),
                         const Text('Opcionales. Selecciona o quita hasta 5.'),
                         if (_interests.isEmpty)
@@ -499,18 +513,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         ),
                         const SizedBox(height: 24),
-                        Text(
+                        const SectionHeading(
                           'Fotografías *',
-                          style: Theme.of(context).textTheme.titleLarge,
+                          icon: Icons.photo_library_outlined,
+                          subtitle: 'Tu mejor presentación',
                         ),
                         const Text(
                           'Hasta 6 imágenes JPG, PNG o WebP de 5 MB. Las fotos se guardan al realizar cada acción.',
                         ),
+                        if (_busy)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Column(
+                              children: [
+                                LinearProgressIndicator(),
+                                SizedBox(height: 8),
+                                Text('Procesando cambios…'),
+                              ],
+                            ),
+                          ),
                         const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: _profile!.photoUrls.map(_photo).toList(),
+                        if (_profile!.photoUrls.isEmpty)
+                          const AppNotice(
+                            'Añade tu primera foto para que puedan conocerte.',
+                          ),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final columns = constraints.maxWidth >= 540 ? 3 : 2;
+                            final width =
+                                (constraints.maxWidth - 12 * (columns - 1)) /
+                                columns;
+                            return Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: _profile!.photoUrls
+                                  .map((url) => _photo(url, width))
+                                  .toList(),
+                            );
+                          },
                         ),
                         const SizedBox(height: 12),
                         OutlinedButton.icon(
@@ -546,6 +586,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         ],
                         const SizedBox(height: 24),
+                        const SectionHeading(
+                          'Visibilidad',
+                          icon: Icons.visibility_outlined,
+                        ),
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Activar perfil al guardar'),
@@ -592,6 +636,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ),
   );
 
+  Widget _overview() {
+    final profile = _profile!;
+    final career = _careers
+        .where((item) => item.id == profile.careerId)
+        .firstOrNull;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(height: 240, child: AppPhoto(url: profile.mainPhotoUrl)),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  profile.firstName.trim().isEmpty
+                      ? 'Tu perfil, tu historia'
+                      : '${profile.firstName} ${profile.lastName}${profile.birthDate == null ? '' : ', ${ageOn(profile.birthDate!)}'}',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                if (career != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    career.name,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                ],
+                if (profile.description.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(profile.description),
+                ],
+                if (profile.interestIds.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: _interests
+                        .where((item) => profile.interestIds.contains(item.id))
+                        .map((item) => Chip(label: Text(item.name)))
+                        .toList(),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () => Scrollable.ensureVisible(
+                          _editSection.currentContext!,
+                          duration: const Duration(milliseconds: 300),
+                          alignment: 0,
+                        ),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Editar perfil'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _text(
     TextEditingController controller,
     String label,
@@ -611,34 +719,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ),
   );
 
-  Widget _photo(String url) {
+  Widget _photo(String url, double width) {
     final main = url == _profile!.mainPhotoUrl;
     return SizedBox(
-      width: 190,
+      width: width,
       child: Card(
         clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
-            Image.network(
-              url,
-              height: 170,
-              width: 190,
-              fit: BoxFit.cover,
-              webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
-              loadingBuilder: (context, child, progress) => progress == null
-                  ? child
-                  : const SizedBox(
-                      height: 170,
-                      child: Center(child: CircularProgressIndicator()),
+            SizedBox(
+              height: width * 1.15,
+              width: double.infinity,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AppPhoto(url: url),
+                  if (main)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.ink,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.star_rounded,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'Principal',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-              errorBuilder: (context, error, stack) => const SizedBox(
-                height: 170,
-                child: Center(
-                  child: Text(
-                    'No se pudo cargar la foto',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
+                ],
               ),
             ),
             TextButton.icon(
@@ -649,11 +778,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       success: 'Foto principal actualizada.',
                     ),
               icon: Icon(main ? Icons.star : Icons.star_border),
-              label: Text(main ? 'Principal' : 'Hacer principal'),
+              label: Text(main ? 'Foto elegida' : 'Hacer principal'),
             ),
             TextButton.icon(
               onPressed: _busy ? null : () => _delete(url),
               icon: const Icon(Icons.delete_outline),
+              style: TextButton.styleFrom(foregroundColor: AppColors.danger),
               label: const Text('Eliminar'),
             ),
           ],

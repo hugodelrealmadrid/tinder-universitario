@@ -1,3 +1,4 @@
+import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart' show firebaseError;
 import 'discovery_preferences.dart';
@@ -112,6 +113,8 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        const AppMark(size: 56),
+                        const SizedBox(height: 24),
                         const Text(
                           '¿A quién te gustaría conocer?',
                           style: TextStyle(
@@ -124,6 +127,10 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                           'Solo se mostrarán personas cuyas preferencias también te incluyan. Tus preferencias son privadas.',
                         ),
                         const SizedBox(height: 24),
+                        const SectionHeading(
+                          'Tu conexión ideal',
+                          icon: Icons.favorite_border,
+                        ),
                         DropdownButtonFormField<String>(
                           key: ValueKey('preferred-$_gender'),
                           initialValue: _gender,
@@ -147,24 +154,16 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                               : 'Selecciona una opción.',
                         ),
                         const SizedBox(height: 20),
+                        const SectionHeading(
+                          'Rango de edad',
+                          icon: Icons.tune_rounded,
+                          subtitle: 'Entre 18 y 100 años',
+                        ),
                         _ageField('Edad mínima', _min, (value) => _min = value),
                         const SizedBox(height: 20),
                         _ageField('Edad máxima', _max, (value) => _max = value),
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(
-                              _error!,
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                            ),
-                          ),
-                        if (_notice != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(_notice!),
-                          ),
+                        if (_error != null) AppNotice(_error!, error: true),
+                        if (_notice != null) AppNotice(_notice!),
                         const SizedBox(height: 24),
                         FilledButton(
                           onPressed: _saving ? null : _save,

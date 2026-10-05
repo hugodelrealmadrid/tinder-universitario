@@ -1,3 +1,5 @@
+import '../../theme/app_theme.dart';
+import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import 'auth_service.dart';
 
@@ -57,7 +59,7 @@ class _AuthFormState extends State<AuthForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Icon(Icons.favorite, color: Color(0xFFE94057), size: 64),
+            const AppMark(size: 72),
             const SizedBox(height: 20),
             const Text(
               'Tinder Universitario',
@@ -72,6 +74,11 @@ class _AuthFormState extends State<AuthForm> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 28),
+            Text(
+              widget.register ? 'Tu historia empieza aquí' : 'Qué bueno verte',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 20),
             TextFormField(
               controller: _email,
               enabled: !_busy,
@@ -80,6 +87,7 @@ class _AuthFormState extends State<AuthForm> {
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
                 labelText: 'Correo electrónico',
+                prefixIcon: Icon(Icons.mail_outline_rounded),
               ),
               validator: (value) =>
                   RegExp(
@@ -100,6 +108,7 @@ class _AuthFormState extends State<AuthForm> {
               ],
               decoration: InputDecoration(
                 labelText: 'Contraseña',
+                prefixIcon: const Icon(Icons.lock_outline_rounded),
                 suffixIcon: IconButton(
                   tooltip: _hidePassword
                       ? 'Mostrar contraseña'
@@ -185,25 +194,34 @@ class AuthCard extends StatelessWidget {
   final Widget child;
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 460),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x14000000),
-                  blurRadius: 30,
-                  offset: Offset(0, 10),
-                ),
-              ],
+    body: DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.rose, AppColors.background, Color(0xFFFFF0E8)],
+        ),
+      ),
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 460),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x0CC93656),
+                    blurRadius: 40,
+                    offset: Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: child,
             ),
-            child: child,
           ),
         ),
       ),

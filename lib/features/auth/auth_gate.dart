@@ -4,6 +4,7 @@ import 'auth_form.dart';
 import 'auth_service.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
+import 'email_verification_screen.dart';
 import '../home/home_screen.dart';
 
 class AuthGate extends StatefulWidget {
@@ -63,6 +64,17 @@ class _ProfileGateState extends State<ProfileGate> {
   Widget build(BuildContext context) => FutureBuilder<bool>(
     future: _profile,
     builder: (context, snapshot) {
+      // Se conserva la inicialización idempotente del perfil en segundo plano.
+      // Ni un perfil existente ni un error de Firestore habilitan la aplicación.
+      final current = widget.service.currentUser;
+      if (current == null ||
+          current.uid != widget.user.uid ||
+          !current.emailVerified) {
+        return EmailVerificationScreen(
+          service: widget.service,
+          onVerified: () => setState(() {}),
+        );
+      }
       if (snapshot.connectionState != ConnectionState.done) {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }

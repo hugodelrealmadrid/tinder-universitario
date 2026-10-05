@@ -1,3 +1,5 @@
+import '../../theme/app_theme.dart';
+import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import '../discovery/discovery_models.dart';
 import '../matches/student_match.dart';
@@ -85,6 +87,10 @@ class _ChatScreenState extends State<ChatScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
+          icon: const Icon(
+            Icons.heart_broken_outlined,
+            color: AppColors.danger,
+          ),
           title: const Text('¿Deshacer match?'),
           content: const Text(
             'Ya no podrán enviarse mensajes nuevos. El historial se conservará.',
@@ -96,6 +102,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             FilledButton(
               key: const ValueKey('confirm-unmatch'),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
               onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Deshacer match'),
             ),
@@ -193,15 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: SizedBox(
                 width: 36,
                 height: 36,
-                child: profile == null || profile.mainPhotoUrl.isEmpty
-                    ? const Icon(Icons.person_outline)
-                    : Image.network(
-                        profile.mainPhotoUrl,
-                        fit: BoxFit.cover,
-                        webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
-                        errorBuilder: (context, error, stack) =>
-                            const Icon(Icons.person_outline),
-                      ),
+                child: AppPhoto(url: profile?.mainPhotoUrl),
               ),
             ),
             const SizedBox(width: 12),
@@ -255,7 +254,12 @@ class _ChatScreenState extends State<ChatScreen> {
                           final messages = history.data!;
                           if (messages.isEmpty) {
                             return const Center(
-                              child: Text('Aún no hay mensajes. ¡Saluda!'),
+                              child: AppEmptyState(
+                                icon: Icons.waving_hand_outlined,
+                                title: 'Aún no hay mensajes. ¡Saluda!',
+                                message:
+                                    'Un hola puede ser el comienzo de una buena conversación.',
+                              ),
                             );
                           }
                           // reverse ancla la vista al final; arriba sigue lo más antiguo.
@@ -279,7 +283,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     if (!active)
                       const Padding(
                         padding: EdgeInsets.all(12),
-                        child: Text(
+                        child: AppNotice(
                           'Este match ha finalizado. Ya no puedes enviar mensajes. Puedes consultar el historial.',
                         ),
                       ),
@@ -312,7 +316,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               onChanged: (_) => setState(() {}),
                               decoration: InputDecoration(
                                 labelText: 'Mensaje',
-                                border: const OutlineInputBorder(),
+                                prefixIcon: const Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                ),
                                 counterText:
                                     '${_draft.text.trim().length}/${ChatLimits.maxTextLength}',
                               ),
@@ -323,6 +329,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             padding: const EdgeInsets.only(bottom: 24),
                             child: IconButton.filled(
                               key: const ValueKey('chat-send'),
+                              style: IconButton.styleFrom(
+                                minimumSize: const Size(52, 52),
+                              ),
                               tooltip: _sending ? 'Enviando' : 'Enviar',
                               onPressed: active && !_sending && !_closing
                                   ? _send
@@ -372,7 +381,6 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final date = message.createdAt?.toLocal();
     final label = date == null
         ? 'Enviando…'
@@ -380,22 +388,38 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: own ? Alignment.centerRight : Alignment.centerLeft,
       child: FractionallySizedBox(
-        widthFactor: .85,
+        widthFactor: .82,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: own
-                ? colors.primaryContainer
-                : colors.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
+            color: own ? AppColors.coral : Colors.white,
+            border: own ? null : Border.all(color: const Color(0xFFECE7ED)),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(20),
+              topRight: const Radius.circular(20),
+              bottomLeft: Radius.circular(own ? 20 : 6),
+              bottomRight: Radius.circular(own ? 6 : 20),
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(message.text),
+              Text(
+                message.text,
+                style: TextStyle(
+                  color: own ? Colors.white : AppColors.ink,
+                  height: 1.5,
+                ),
+              ),
               const SizedBox(height: 4),
-              Text(label, style: Theme.of(context).textTheme.labelSmall),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: own ? Colors.white : AppColors.muted,
+                ),
+              ),
             ],
           ),
         ),

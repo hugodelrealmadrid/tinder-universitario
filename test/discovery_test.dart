@@ -318,6 +318,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byType(EditableText), findsNothing);
+    await tester.ensureVisible(find.text('Guardar preferencias'));
     await tester.tap(find.text('Guardar preferencias'));
     await tester.pumpAndSettle();
     expect(find.text('Selecciona una opción.'), findsOneWidget);
