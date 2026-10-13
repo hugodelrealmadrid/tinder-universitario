@@ -33,8 +33,14 @@ class ChatMessage {
     required this.senderId,
     required this.text,
     required this.createdAt,
+    this.type = 'text',
+    this.mediaPath,
+    this.readAt,
   });
   final String id, senderId, text;
+  final String type;
+  final String? mediaPath;
+  final DateTime? readAt;
   // Un serverTimestamp pendiente puede ser null en el snapshot local.
   final DateTime? createdAt;
 
@@ -42,7 +48,10 @@ class ChatMessage {
       ChatMessage(
         id: id,
         senderId: data['senderId'] as String,
-        text: data['text'] as String,
+        text: data['text'] as String? ?? '',
+        type: data['type'] as String? ?? 'text',
+        mediaPath: data['mediaPath'] as String?,
+        readAt: (data['readAt'] as Timestamp?)?.toDate(),
         createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       );
 

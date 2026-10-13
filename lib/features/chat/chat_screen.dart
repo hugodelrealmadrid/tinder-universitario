@@ -1,6 +1,12 @@
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
+
+import 'chat_media_widget.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_ui.dart';
+
 import 'package:flutter/material.dart';
+
 import '../discovery/discovery_models.dart';
 import '../matches/student_match.dart';
 import '../matches/unmatch_service.dart';
@@ -30,7 +36,8 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
+  final _reading = <String>{};
   late final _service = widget.service ?? ChatService();
   late Stream<StudentMatch> _match;
   late Stream<List<ChatMessage>> _messages;
@@ -42,12 +49,107 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _listen();
   }
 
   void _listen() {
     _match = _service.watchMatch(widget.matchId, widget.uid);
     _messages = _service.watchMessages(widget.matchId);
+  }
+
+  void _readVisible(ChatMessage message) {
+    if (message.isOwn(widget.uid) ||
+        message.readAt != null ||
+        message.createdAt == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive ||
+        ModalRoute.of(context)?.isCurrent != true ||
+        !_reading.add(message.id)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        _reading.remove(message.id);
+        return;
+      }
+      try {
+        await _service.markRead(widget.matchId, widget.uid, message);
+      } catch (_) {
+        _reading.remove(message.id);
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) setState(() {});
+  }
+
+  Future<void> _attach(bool audio) async {
+    if (_sending || _closing) return;
+    setState(() {
+      _sending = true;
+      _sendError = null;
+    });
+    try {
+      if (audio) {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['mp3', 'm4a', 'wav', 'ogg'],
+          withData: true,
+        );
+        if (!mounted || result == null) return;
+        final file = result.files.single;
+        final mime = {
+          'mp3': 'audio/mpeg',
+          'm4a': 'audio/mp4',
+          'wav': 'audio/wav',
+          'ogg': 'audio/ogg',
+        }[file.extension?.toLowerCase()];
+        if (mime == null || file.bytes == null) {
+          throw const ChatException('Formato de audio no compatible.');
+        }
+        await _service.sendMedia(
+          widget.matchId,
+          widget.uid,
+          file.bytes!,
+          'audio',
+          mime,
+        );
+      } else {
+        final file = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1600,
+          imageQuality: 85,
+        );
+        if (!mounted || file == null) return;
+        final bytes = await file.readAsBytes();
+        final mime = bytes.length >= 3 && bytes[0] == 255 && bytes[1] == 216
+            ? 'image/jpeg'
+            : bytes.length >= 8 && bytes[0] == 137 && bytes[1] == 80
+            ? 'image/png'
+            : bytes.length >= 12 &&
+                  String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF' &&
+                  String.fromCharCodes(bytes.sublist(8, 12)) == 'WEBP'
+            ? 'image/webp'
+            : null;
+        if (mime == null) {
+          throw const ChatException('Selecciona una imagen JPG, PNG o WebP.');
+        }
+        await _service.sendMedia(
+          widget.matchId,
+          widget.uid,
+          bytes,
+          'image',
+          mime,
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _sendError = chatError(error));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   void _retry() => setState(_listen);
@@ -120,9 +222,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(unmatchError(error))));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(unmatchError(error))));
       }
     } finally {
       if (mounted) setState(() => _closing = false);
@@ -147,6 +248,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _draft.dispose();
     super.dispose();
   }
@@ -257,8 +359,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: AppEmptyState(
                                 icon: Icons.waving_hand_outlined,
                                 title: 'Aún no hay mensajes. ¡Saluda!',
-                                message:
-                                    'Un hola puede ser el comienzo de una buena conversación.',
+                                message: 'Un hola puede ser el comienzo de una buena conversación.',
                               ),
                             );
                           }
@@ -270,9 +371,11 @@ class _ChatScreenState extends State<ChatScreen> {
                             itemBuilder: (context, index) {
                               final message =
                                   messages[messages.length - 1 - index];
+                              _readVisible(message);
                               return MessageBubble(
                                 key: ValueKey(message.id),
                                 message: message,
+                                service: _service,
                                 own: message.isOwn(widget.uid),
                               );
                             },
@@ -305,6 +408,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
+                          IconButton(
+                            tooltip: 'Enviar imagen',
+                            icon: const Icon(Icons.image_outlined),
+                            onPressed: active && !_sending && !_closing
+                                ? () => _attach(false)
+                                : null,
+                          ),
+                          IconButton(
+                            tooltip: 'Enviar audio',
+                            icon: const Icon(Icons.audio_file_outlined),
+                            onPressed: active && !_sending && !_closing
+                                ? () => _attach(true)
+                                : null,
+                          ),
                           Expanded(
                             child: TextField(
                               key: const ValueKey('chat-draft'),
@@ -375,7 +492,13 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message, required this.own});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.own,
+    this.service,
+  });
+  final ChatService? service;
   final ChatMessage message;
   final bool own;
 
@@ -405,14 +528,34 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                message.text,
-                style: TextStyle(
-                  color: own ? Colors.white : AppColors.ink,
-                  height: 1.5,
+              if (message.mediaPath != null)
+                ChatMediaWidget(
+                  path: message.mediaPath!,
+                  type: message.type,
+                  service: service,
                 ),
-              ),
+              if (message.text.isNotEmpty)
+                Text(
+                  message.text,
+                  style: TextStyle(
+                    color: own ? Colors.white : AppColors.ink,
+                    height: 1.5,
+                  ),
+                ),
               const SizedBox(height: 4),
+              if (own)
+                Icon(
+                  message.createdAt == null ? Icons.schedule : Icons.done_all,
+                  size: 18,
+                  color: message.readAt != null
+                      ? Colors.blue.shade900
+                      : Colors.white,
+                  semanticLabel: message.createdAt == null
+                      ? 'Enviando'
+                      : message.readAt != null
+                      ? 'Visto'
+                      : 'Enviado',
+                ),
               Text(
                 label,
                 style: TextStyle(
