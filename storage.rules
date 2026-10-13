@@ -1,6 +1,29 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    match /chat_media/{matchId}/{uid}/{messageId} {
+      function pair() {
+        return firestore.get(/databases/(default)/documents/matches/$(matchId)).data;
+      }
+      function participant() {
+        return request.auth != null && request.auth.uid in pair().users;
+      }
+      function unblocked() {
+        let users = pair().users;
+        return !firestore.exists(/databases/(default)/documents/blocks/$(users[0] + '.' + users[1]))
+          && !firestore.exists(/databases/(default)/documents/blocks/$(users[1] + '.' + users[0]));
+      }
+      allow read: if participant();
+      allow create: if participant() && request.auth.uid == uid
+        && pair().isActive == true && unblocked() && request.resource.size > 0
+        && ((request.resource.size <= 5 * 1024 * 1024
+            && request.resource.contentType.matches('image/(jpeg|png|webp)'))
+          || (request.resource.size <= 15 * 1024 * 1024
+            && request.resource.contentType.matches('audio/(mpeg|mp4|wav|ogg)')));
+      allow delete: if participant() && request.auth.uid == uid
+        && !firestore.exists(/databases/(default)/documents/matches/$(matchId)/messages/$(messageId));
+      allow update: if false;
+    }
     match /profile_photos/{uid}/{fileName} {
       function owner() { return request.auth != null && request.auth.uid == uid; }
       allow read: if owner();

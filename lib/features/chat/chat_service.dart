@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../matches/student_match.dart';
 import 'chat_message.dart';
 import '../safety/safety_models.dart';
@@ -42,6 +46,62 @@ class ChatService {
             .map((doc) => ChatMessage.fromMap(doc.id, doc.data()))
             .toList(),
       );
+
+  Future<void> markRead(String matchId, String uid, ChatMessage message) async {
+    if (message.senderId == uid ||
+        message.readAt != null ||
+        message.createdAt == null) {
+      return;
+    }
+    await _db
+        .collection('matches')
+        .doc(matchId)
+        .collection('messages')
+        .doc(message.id)
+        .update({'readAt': FieldValue.serverTimestamp()});
+  }
+
+  Future<String> mediaUrl(String path) =>
+      FirebaseStorage.instance.ref(path).getDownloadURL();
+
+  Future<void> sendMedia(
+    String matchId,
+    String uid,
+    Uint8List bytes,
+    String type,
+    String contentType,
+  ) async {
+    if (!['image', 'audio'].contains(type) ||
+        bytes.isEmpty ||
+        bytes.length > (type == 'image' ? 5 : 15) * 1024 * 1024) {
+      throw const ChatException('Imagen: máximo 5 MB. Audio: máximo 15 MB.');
+    }
+    final parent = _db.collection('matches').doc(matchId);
+    final match = _participant(
+      await parent.get(const GetOptions(source: Source.server)),
+      uid,
+    );
+    if (!match.isActive) throw const ChatException('Este match está inactivo.');
+    final message = parent.collection('messages').doc();
+    final path = 'chat_media/$matchId/$uid/${message.id}';
+    final ref = FirebaseStorage.instance.ref(path);
+    await ref.putData(bytes, SettableMetadata(contentType: contentType));
+    try {
+      await message.set({
+        'senderId': uid,
+        'text': '',
+        'type': type,
+        'mediaPath': path,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Preserve the original failure even if cleanup cannot reach Storage.
+      try {
+        await ref.delete();
+      } catch (_) {}
+      rethrow;
+    }
+  }
 
   Future<void> send(String matchId, String uid, String draft) async {
     final text = ChatLimits.normalize(draft);

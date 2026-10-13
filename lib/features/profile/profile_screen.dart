@@ -1,12 +1,15 @@
 import '../../theme/app_theme.dart';
 import '../../widgets/app_ui.dart';
 import '../preferences/discovery_preferences.dart' show ageOn;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
 import '../auth/auth_service.dart';
 import 'profile_service.dart';
 import 'student_profile.dart';
+import 'profile_preview_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
@@ -254,6 +257,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _overview(),
+                        OutlinedButton.icon(
+                          key: const ValueKey('profile-preview'),
+                          onPressed: _busy
+                              ? null
+                              : () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => ProfilePreviewScreen(
+                                      profile: _draft,
+                                      careers: _careers,
+                                      interests: _interests,
+                                    ),
+                                  ),
+                                ),
+                          icon: const Icon(Icons.visibility_outlined),
+                          label: const Text('Vista previa de mi perfil'),
+                        ),
                         const SizedBox(height: 16),
                         Text(
                           _profile!.email,
@@ -450,8 +469,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               _selectedInterests.length >=
                                                   maxInterests) {
                                             setState(
-                                              () => _error =
-                                                  'Puedes seleccionar hasta 5 intereses.',
+                                              () => _error = 'Puedes seleccionar hasta 5 intereses.',
                                             );
                                             return;
                                           }
