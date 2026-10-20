@@ -2,7 +2,7 @@
 
 Fecha: 19 de octubre de 2026, America/La_Paz. Directorio de trabajo: `C:\Users\HP\Desktop\tinder_universitario_pruebas`.
 
-**Resultado:** trabajo de las cinco fases consolidado en `feature/integracion-tinder`, desde `2b448ae41fe4e0fbab38cf632cc4003440252b41`. No se hizo merge, rebase, push ni deploy. No se utilizó Firebase de producción. `main` y el worktree original permanecen en `d18360d26648f1296272cce9887692d5b5dcf383`, sin cambios de archivos ni del índice del original.
+**Resultado Git:** trabajo de las cinco fases consolidado en `feature/integracion-tinder`, desde `2b448ae41fe4e0fbab38cf632cc4003440252b41`. No se hizo merge, rebase, push ni deploy. No se utilizó Firebase de producción. `main` y el worktree original permanecen en `d18360d26648f1296272cce9887692d5b5dcf383`, sin cambios de archivos ni del índice del original. **El cierre del demo queda pendiente:** después de pasar las pruebas, terminó inesperadamente su proceso Auth/Storage/hub; se preservaron respaldos y se solicitó autorización antes de importar datos (sección 5).
 
 ## 1. Estado inicial y respaldo comprobado
 
@@ -61,7 +61,8 @@ La rama se creó mediante `git switch -c feature/integracion-tinder`, conservand
 | `8e6045f42d5226bf2177f5e8788a17e70ac5aa3f` | Producto: chat/voz, preferencias, perfiles, fotos privadas, verificación/administración, backend, reglas, dependencias y permiso Android; 50 archivos |
 | `88108fa9be4e78ddb15b035c571e3e78f242f1ae` | Demo aislado Web/Android, configuraciones locales, migraciones demo, herramientas y regresiones; 71 archivos |
 | `a97242fc63126acd09f1b4d6a928db44b3fec662` | Corrección de la prueba demo para aceptar fotografías cambiadas manualmente y verificar sus bytes/autorización, sin restablecer datos |
-| Commit documental que contiene este informe (`HEAD`) | `docs: documentar respaldo y validacion de rama de integracion`; informes históricos, guías actualizadas y este informe |
+| `7a2db0b2f90df3fbb926b4d0b20aa6b238eaa4b1` | `docs: documentar respaldo y validacion de rama de integracion`; informes históricos, guías actualizadas y este informe |
+| Commit documental que contiene esta actualización (`HEAD`) | `docs: registrar interrupcion del demo y recuperacion pendiente`; incidente detectado al verificar por última vez |
 
 El identificador del último commit se obtiene con `git log -1 --format="%H %s"`; no se escribe su hash dentro del archivo que determina ese mismo hash. Los commits de producto/demo forman una unidad de revisión: no seleccionar solo el primero para integrar ni reconstruir una falsa historia por fases.
 
@@ -108,6 +109,7 @@ git show --stat a97242f
 | Demo, repetición completa | **10 aprobadas, 0 fallidas** | `build/integracion-demo-test-final.log` |
 | CLI catálogos existente | **4 aprobadas, 0 fallidas** | `build/integracion-catalogos-test.log` |
 | Salud demo actual | Auth/Firestore/Storage/backend/proxy correctos; Ana/Bob aprobados y no suspendidos; descarga privada funciona y anónimo denegado | `build/integracion-demo-salud.log` |
+| Salud, última repetición | **Falló**: fotografía devolvió 403; luego se comprobó proceso Auth/Storage/hub terminado y puerto 4400 rechazando conexiones | `build/integracion-demo-salud-final.log`, `build/integracion-diagnostico-demo.log` |
 | `npm audit --omit=dev` | **0 vulnerabilidades notificadas**, salida 0 | `build/integracion-npm-runtime.json` |
 | `npm audit` completo | **3 paquetes con alerta alta**, salida 1; misma cadena de desarrollo conocida | `build/integracion-npm-audit.json` |
 | `git diff --cached --check`, revisión de índice | Pasaron antes de cada commit tras limpieza de EOF | `build/revision-commit-*.json` |
@@ -124,15 +126,31 @@ En pruebas: rama `feature/integracion-tinder`, código y documentación versiona
 
 En el original: `main`, HEAD y referencia main exactamente en `d18360d26648f1296272cce9887692d5b5dcf383`; árbol e índice limpios. `origin/main` tampoco se movió. No se hizo checkout ni edición en el proyecto original.
 
-El demo conserva sus mismos listeners y procesos: Web 7357/PID 1380, backend 7360/PID 22160, Auth/Storage 9099/9198/PID 26384 y Firestore 8088/PID 21484, todos `127.0.0.1`. No se reinició, reseedó ni migró el demo. Las comprobaciones de login pueden actualizar metadata de última sesión Auth; los intentos de escritura denegados no cambian perfiles. Se mantuvieron las fotografías seleccionadas manualmente y los estados administrativos existentes.
+Al terminar las suites, los listeners eran Web 7357/PID 1380, backend 7360/PID 22160, Auth/Storage 9099/9198/PID 26384 y Firestore 8088/PID 21484, todos `127.0.0.1`. Sin embargo, **la última comprobación detectó una interrupción posterior**: el proceso 26384 terminó y dejaron de escuchar 4400, 9099 y 9198. Web/backend/Firestore siguen activos. No se reinició, reseedó ni migró el demo. Las comprobaciones de login pueden actualizar metadata de última sesión Auth; los intentos de escritura denegados no cambian perfiles.
 
-**URL:** http://127.0.0.1:7357/ (inicio verificado: http://127.0.0.1:7357/__demo/start.html).
+**URL Web:** http://127.0.0.1:7357/ (entrada: http://127.0.0.1:7357/__demo/start.html). La página sigue servida, pero **no se considera demo funcional hasta recuperar Auth y Storage**.
 
 Ana: `ana.manual@demo.test`; Bob: `bob.manual@demo.test`; contraseña ficticia `DemoTinder2026!`. Guías del repositorio documentan los demás roles. Mantener la PC encendida y los túneles USB si se utiliza el teléfono.
 
+### Incidente final y recuperación preparada, NO ejecutada
+
+`audit-phase4-emulators-local.log` termina con «Error: An unexpected error has occurred». Se comprobó que el proceso que alojaba Auth/Storage/hub ya no existe. El log disponible no establece la causa raíz; no se atribuye a reglas ni se afirma que la prueba secundaria lo haya causado. No se relajó seguridad para corregir el 403.
+
+Antes de cualquier reinicio se exportó directamente el Firestore que sigue vivo a una ruta nueva, mediante la misma API local de exportación que utiliza el CLI:
+
+```text
+build/respaldo-integracion-20261019-222416/firestore-vivo-223840/
+```
+
+Respuesta 200; metadata e inventario SHA-256 conservados. El archivo de datos `output-0` coincide exactamente con el export completo de las 22:24: SHA-256 `4AC18BEAA74FA5C6F418E511E75AB60885205942B22946BC8D9F7297A2C6F7FD`. No se detectaron cambios en ese contenido Firestore entre ambos exports. Esto no permite recuperar cambios Auth/Storage no exportados.
+
+Se preparó **sin importar ni sobrescribir** la carpeta `build/respaldo-integracion-20261019-222416/recuperacion-propuesta/`: Firestore de las 22:38 y Auth/Storage del respaldo completo de las 22:24. Se verificaron por hash los 34 archivos copiados; inventario en `SHA256-recuperacion-propuesta.json`. El snapshot completo inicial sigue intacto. También existe `rama-consolidada.bundle`, verificado, con los cuatro commits anteriores a este incidente, y `estado-consolidado.json`/`SHA256-consolidado.json` con sus identificadores.
+
+Se solicitó autorización expresa para recuperar con esa combinación, porque no puede garantizarse preservar modificaciones de Auth/Storage posteriores a las 22:24. La instrucción del usuario exige detenerse ante una operación con posible pérdida de datos. **No se detuvo el Firestore vivo ni se importó el snapshot pendiente de esa respuesta.** Una recuperación autorizada deberá conservar nuevamente el Firestore vivo si cambió, liberar solo sus procesos identificados, arrancar los emuladores con proyecto/config/import explícitos y repetir salud/privacidad/demo. No usar seeds ni los exports de fases anteriores.
+
 ## 6. Riesgos y condiciones para integrar con main
 
-**Preparación local completada. La rama está disponible para revisión y una futura fusión local autorizada; no se fusionó. No está lista para desplegar a producción.**
+**Consolidación Git completada; recuperación del demo pendiente de autorización.** La rama está disponible para revisión. Antes de recomendar una futura fusión local, recuperar el demo y repetir su validación. No se fusionó ni está lista para desplegar a producción.
 
 1. Antes de una fusión, revisar el diff completo y revalidar main: esta sesión no actualizó referencias remotas. Si main gana cambios, recalcular conflictos; no usar una resolución que relaje reglas o restaure URLs tokenizadas. Integrar conjuntamente cliente/backend/reglas/pruebas, no cherry-picks parciales.
 2. El backend continúa limitado a emuladores. Faltan implementación y revisión de producción, IAM mínimo, HTTPS, validación real, consulta equivalente de visibilidad, índices, límites distribuidos, sandbox del decodificador y tareas de limpieza supervisadas. No quitar los guards demo para desplegarlo.
