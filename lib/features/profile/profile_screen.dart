@@ -469,7 +469,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               _selectedInterests.length >=
                                                   maxInterests) {
                                             setState(
-                                              () => _error = 'Puedes seleccionar hasta 5 intereses.',
+                                              () => _error =
+                                                  'Puedes seleccionar hasta 5 intereses.',
                                             );
                                             return;
                                           }

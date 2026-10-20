@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import '../verification/account_access.dart';
 
 bool isAdult(DateTime birthDate, {DateTime? today}) {
   final now = today ?? DateTime.now();
@@ -76,7 +77,19 @@ class AuthService extends ChangeNotifier {
        _db = firestore ?? FirebaseFirestore.instance,
        _now = now ?? DateTime.now;
   final FirebaseAuth _auth;
+  FirebaseAuth get auth => _auth;
   final FirebaseFirestore _db;
+  Stream<AccountAccess> watchAccountAccess(String uid) => _db
+      .collection('accountAccess')
+      .doc(uid)
+      .snapshots(includeMetadataChanges: true)
+      .map(
+        (s) => AccountAccess.fromMap(
+          s.metadata.isFromCache || s.metadata.hasPendingWrites
+              ? null
+              : s.data(),
+        ),
+      );
   final DateTime Function() _now;
   DateTime? _registrationBirthDate;
   // Incluye los cambios producidos por reload(), además de login/logout.

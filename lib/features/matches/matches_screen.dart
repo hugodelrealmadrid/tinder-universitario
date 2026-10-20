@@ -8,6 +8,7 @@ import 'student_match.dart';
 import '../chat/chat_screen.dart';
 import '../chat/chat_service.dart';
 import 'unmatch_service.dart';
+import 'match_profile_screen.dart';
 
 class MatchesScreen extends StatefulWidget {
   const MatchesScreen({
@@ -209,22 +210,33 @@ class MatchTile extends StatelessWidget {
                           : entry.careerName ?? 'Carrera no disponible',
                     ),
                     const SizedBox(height: 12),
-                    const Row(
-                      children: [
-                        Icon(
-                          Icons.chat_bubble_outline_rounded,
-                          size: 16,
-                          color: AppColors.coral,
-                        ),
-                        SizedBox(width: 6),
-                        Text(
-                          'Abrir chat',
-                          style: TextStyle(
-                            color: AppColors.coral,
-                            fontWeight: FontWeight.w700,
+                    if (profile != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.person_outline),
+                        label: const Text('Ver perfil'),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => MatchProfileScreen(
+                              viewer: entry.match.otherUser(profile.id),
+                              target: profile.id,
+                            ),
                           ),
                         ),
-                      ],
+                      ),
+                    TextButton.icon(
+                      onPressed: onTap,
+                      icon: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 16,
+                        color: AppColors.coral,
+                      ),
+                      label: const Text(
+                        'Abrir chat',
+                        style: TextStyle(
+                          color: AppColors.coral,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                   ],
                 ),

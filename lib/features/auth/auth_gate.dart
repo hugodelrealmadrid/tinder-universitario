@@ -6,6 +6,7 @@ import 'login_screen.dart';
 import 'register_screen.dart';
 import 'email_verification_screen.dart';
 import '../home/home_screen.dart';
+import '../verification/university_gate.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key, required this.service});
@@ -79,7 +80,11 @@ class _ProfileGateState extends State<ProfileGate> {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
       if (snapshot.data == true) {
-        return HomeScreen(service: widget.service, uid: widget.user.uid);
+        return UniversityGate(
+          service: widget.service,
+          uid: widget.user.uid,
+          child: HomeScreen(service: widget.service, uid: widget.user.uid),
+        );
       }
       return AuthCard(
         child: Form(

@@ -2,14 +2,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    // Proyección booleana exclusiva del servidor, actualizada atómicamente con
+    // accountAccess. Reutiliza users para respetar las 10 lecturas de Rules.
+    // No se confía en users.role ni claims de rol.
+    function eligible(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.datingAllowed == true;
+    }
+    function dating() { return request.auth != null && eligible(request.auth.uid); }
+    function selfEditable(uid) {
+      return !exists(/databases/$(database)/documents/accountAccess/$(uid))
+        || get(/databases/$(database)/documents/accountAccess/$(uid)).data.suspended == false;
+    }
+    match /accountAccess/{uid} {
+      allow get: if owner(uid);
+      allow list, write: if false;
+    }
+    match /verificationRequests/{id} {
+      allow get: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow list: if request.auth != null && resource.data.uid == request.auth.uid
+        && request.query.limit != null && request.query.limit <= 20;
+      allow write: if false;
+    }
     function validGender(value) { return value in ['masculino', 'femenino']; }
     // Debe coincidir con DiscoveryLimits.maxAge y PreferredGender en Dart.
     function validPreferences(data) {
       return data.keys().hasAll(['minAge', 'maxAge', 'preferredGender', 'updatedAt'])
-        && data.keys().hasOnly(['minAge', 'maxAge', 'preferredGender', 'updatedAt'])
+        && data.keys().hasOnly(['minAge', 'maxAge', 'preferredGender', 'updatedAt', 'careerIds'])
         && data.minAge is int && data.maxAge is int
         && data.minAge >= 18 && data.minAge <= data.maxAge && data.maxAge <= 100
-        && data.preferredGender in ['masculino', 'femenino', 'ambos'];
+        && data.preferredGender in ['masculino', 'femenino', 'ambos']
+        && validCareerIds(data.get('careerIds', []));
+    }
+    function validCareerIds(ids) {
+      return ids is list && ids.size() <= 5 && ids.toSet().size() == ids.size();
+    }
+    function activeCareerIds(ids) {
+      return (ids.size() < 1 || careerActive(ids[0])) && (ids.size() < 2 || careerActive(ids[1]))
+        && (ids.size() < 3 || careerActive(ids[2])) && (ids.size() < 4 || careerActive(ids[3]))
+        && (ids.size() < 5 || careerActive(ids[4]));
     }
     function age(date) {
       return request.time.year() - date.year() -
@@ -17,16 +47,18 @@ service cloud.firestore {
           (request.time.month() == date.month() && request.time.day() < date.day())) ? 1 : 0);
     }
     function accepts(preferences, profile) {
+      let profileAge = age(profile.birthDate);
       return validPreferences(preferences) && validGender(profile.gender)
+        && (preferences.get('careerIds', []).size() == 0 || profile.careerId in preferences.careerIds)
         && (preferences.preferredGender == 'ambos' || preferences.preferredGender == profile.gender)
-        && age(profile.birthDate) >= preferences.minAge && age(profile.birthDate) <= preferences.maxAge;
+        && profileAge >= preferences.minAge && profileAge <= preferences.maxAge;
     }
     function reciprocal(from, to) {
       let a = get(/databases/$(database)/documents/users/$(from)).data;
       let b = get(/databases/$(database)/documents/users/$(to)).data;
       let pa = get(/databases/$(database)/documents/preferences/$(from)).data;
       let pb = get(/databases/$(database)/documents/preferences/$(to)).data;
-      return from != to && a.isActive == true && b.isActive == true
+      return from != to && eligible(to) && a.isActive == true && b.isActive == true
         && complete(a) && complete(b) && accepts(pa, b) && accepts(pb, a);
     }
     function validUid(uid) { return uid is string && uid.matches('[A-Za-z0-9_-]{1,128}'); }
@@ -57,12 +89,13 @@ service cloud.firestore {
           == (data.fromUserId < data.toUserId ? [data.fromUserId,data.toUserId] : [data.toUserId,data.fromUserId]);
     }
     function matched(a, b) {
-      let pair = get(/databases/$(database)/documents/matches/$(matchIdFor(a,b))).data;
-      return pair.isActive == true && a in pair.users && b in pair.users;
+      let path = /databases/$(database)/documents/matches/$(matchIdFor(a,b));
+      return exists(path) && get(path).data.isActive == true
+        && a in get(path).data.users && b in get(path).data.users;
     }
     function matchedCard(viewer, uid) {
       let user = get(/databases/$(database)/documents/users/$(uid)).data;
-      return viewer != uid && matched(viewer, uid) && user.isActive == true
+      return viewer != uid && matched(viewer, uid) && eligible(uid) && user.isActive == true
         && complete(user) && resource.data == cardFields(user);
     }
     function cardFields(user) {
@@ -93,8 +126,8 @@ service cloud.firestore {
         && (ids.size() < 5 || interestActive(ids[4]));
     }
     function ownPhoto(url, uid) {
-      return url is string && url.size() < 2048 && url.matches(
-        'https://firebasestorage[.]googleapis[.]com/v0/b/tinder-universitario[.]firebasestorage[.]app/o/profile_photos%2F' + uid + '%2F[A-Za-z0-9_-]+[?]alt=media&token=[A-Za-z0-9-]+');
+      return url is string && url.matches('profile_photos/' + uid + '/[A-Za-z0-9_-]{1,128}')
+        && url in get(/databases/$(database)/documents/profilePhotoManifests/$(uid)).data.paths;
     }
     function validPhotos(urls, uid) {
       return urls is list && urls.size() <= 6 && urls.toSet().size() == urls.size()
@@ -113,7 +146,8 @@ service cloud.firestore {
     }
     function schema(data, uid) {
       return data.keys().hasAll(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt', 'datingAllowed'])
+        && data.get('datingAllowed', false) is bool
         && data.firstName is string && data.firstName.size() <= 80
         && data.lastName is string && data.lastName.size() <= 80
         && data.gender is string && data.gender.size() <= 50
@@ -131,6 +165,7 @@ service cloud.firestore {
     match /users/{uid} {
       allow get: if owner(uid);
       allow create: if owner(uid) && schema(request.resource.data, uid)
+        && !request.resource.data.keys().hasAny(['datingAllowed'])
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.role == 'user'
         && request.resource.data.isActive == false
@@ -140,7 +175,7 @@ service cloud.firestore {
         && request.resource.data.careerId == null && request.resource.data.interestIds == []
         && request.resource.data.photoUrls == [] && request.resource.data.mainPhotoUrl == null
         && request.resource.data.createdAt == request.time;
-      allow update: if owner(uid) && schema(request.resource.data, uid)
+      allow update: if owner(uid) && selfEditable(uid) && schema(request.resource.data, uid)
         // Un género nuevo debe ser válido. Un valor legado o vacío solo
         // puede conservarse sin cambios en un perfil inactivo (p. ej. fotos).
         && (validGender(request.resource.data.gender)
@@ -165,13 +200,14 @@ service cloud.firestore {
     match /preferences/{uid} {
       allow get: if owner(uid);
       allow create, update: if owner(uid) && validPreferences(request.resource.data)
+        && activeCareerIds(request.resource.data.get('careerIds', []))
         && request.resource.data.updatedAt == request.time;
       allow list, delete: if false;
     }
     // Índice sin datos personales: solo estado y fecha de sincronización.
     match /discoveryIndex/{uid} {
-      allow get: if owner(uid) || (request.auth != null && resource.data.isActive == true);
-      allow list: if request.auth != null && resource.data.isActive == true
+      allow get: if dating() && (owner(uid) || resource.data.isActive == true);
+      allow list: if dating() && resource.data.isActive == true
         && request.query.limit != null && request.query.limit <= 25;
       allow create, update: if owner(uid) && validUid(uid)
         && request.resource.data == {
@@ -180,24 +216,39 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /discoveryCards/{uid} {
-      allow get: if owner(uid) || (request.auth != null && validUid(request.auth.uid) && validUid(uid)
+      allow get: if dating() && (owner(uid) || (validUid(request.auth.uid) && validUid(uid)
         && noBlocks(request.auth.uid, uid)
-        && ((reciprocal(request.auth.uid, uid)
+        && (matchedCard(request.auth.uid, uid) || (reciprocal(request.auth.uid, uid)
         && resource.data == cardFields(get(/databases/$(database)/documents/users/$(uid)).data)
         && !exists(/databases/$(database)/documents/swipes/$(swipeIdFor(request.auth.uid, uid))))
-          || matchedCard(request.auth.uid, uid)));
+          )));
       allow list: if false;
       allow create, update: if owner(uid) && validUid(uid)
         && request.resource.data == cardFields(getAfter(/databases/$(database)/documents/users/$(uid)).data);
       allow delete: if false;
     }
+    // Galería pública solo para una pareja activa, nunca correo o datos privados.
+    match /matchProfiles/{uid} {
+      function fields(user) { return {'firstName':user.firstName,'age':user.birthDate is timestamp ? age(user.birthDate) : null,'gender':user.gender,
+           'description':user.description,'careerId':user.careerId,'mainPhotoUrl':user.mainPhotoUrl,
+           'interestIds':user.interestIds,'isActive':user.isActive,'updatedAt':user.updatedAt,
+           'photoUrls':user.photoUrls}; }
+      allow get: if dating() && eligible(uid) && validUid(uid) && validUid(request.auth.uid)
+        && (owner(uid) || (matched(request.auth.uid, uid) && noBlocks(request.auth.uid, uid)
+          && get(/databases/$(database)/documents/users/$(uid)).data.isActive == true
+          && complete(get(/databases/$(database)/documents/users/$(uid)).data)))
+        && resource.data == fields(get(/databases/$(database)/documents/users/$(uid)).data);
+      allow create, update: if owner(uid)
+        && request.resource.data == fields(getAfter(/databases/$(database)/documents/users/$(uid)).data);
+      allow list, delete: if false;
+    }
     match /swipes/{swipeId} {
       // Se puede comprobar la inexistencia del ID propio en una transacción.
-      allow get: if request.auth != null && validUid(request.auth.uid)
+      allow get: if dating() && validUid(request.auth.uid)
         && (swipeId.matches(request.auth.uid + '[.][A-Za-z0-9_-]{1,128}')
           || swipeId.matches('[A-Za-z0-9_-]{1,128}[.]' + request.auth.uid));
-      allow list: if request.auth != null && resource.data.fromUserId == request.auth.uid;
-      allow create: if request.auth != null
+      allow list: if dating() && resource.data.fromUserId == request.auth.uid;
+      allow create: if dating()
         && request.resource.data.keys().hasAll(['fromUserId', 'toUserId', 'type', 'createdAt'])
         && request.resource.data.keys().hasOnly(['fromUserId', 'toUserId', 'type', 'createdAt'])
         && request.resource.data.fromUserId == request.auth.uid
@@ -213,24 +264,25 @@ service cloud.firestore {
     }
     match /matches/{matchId} {
       // El ID de una pareja permite leer su inexistencia dentro de la transacción.
-      allow get: if request.auth != null && validUid(request.auth.uid)
+      allow get: if dating() && validUid(request.auth.uid)
         && ((exists(/databases/$(database)/documents/matches/$(matchId)) && request.auth.uid in resource.data.users)
           || (!exists(/databases/$(database)/documents/matches/$(matchId))
             && (matchId.matches(request.auth.uid + '[.][A-Za-z0-9_-]{1,128}')
               || matchId.matches('[A-Za-z0-9_-]{1,128}[.]' + request.auth.uid))));
-      allow list: if request.auth != null && request.auth.uid in resource.data.users;
-      allow create: if request.auth != null
+      allow list: if dating() && request.auth.uid in resource.data.users;
+      allow create: if dating()
         && request.resource.data.keys().hasAll(['users','createdAt','isActive'])
         && request.resource.data.keys().hasOnly(['users','createdAt','isActive'])
         && request.resource.data.users is list && request.resource.data.users.size() == 2
         && validUid(request.resource.data.users[0]) && validUid(request.resource.data.users[1])
         && request.resource.data.users[0] < request.resource.data.users[1]
         && request.auth.uid in request.resource.data.users
+        && eligible(request.resource.data.users[0]) && eligible(request.resource.data.users[1])
         && matchId == matchIdFor(request.resource.data.users[0],request.resource.data.users[1])
         && request.resource.data.isActive == true && request.resource.data.createdAt == request.time
         && noBlocksAfter(request.resource.data.users[0], request.resource.data.users[1])
         && mutualLikeAfter(request.resource.data.users[0],request.resource.data.users[1]);
-      allow update: if request.auth != null && request.auth.uid in resource.data.users
+      allow update: if dating() && request.auth.uid in resource.data.users
         && resource.data.isActive == true && request.resource.data.isActive == false
         && request.resource.data.keys().hasAll(['users','createdAt','isActive','closedAt','closedBy'])
         && request.resource.data.keys().hasOnly(['users','createdAt','isActive','closedAt','closedBy'])
@@ -252,15 +304,27 @@ service cloud.firestore {
         function participant() {
           let path = /databases/$(database)/documents/matches/$(matchId);
           let pair = get(path).data;
-          return request.auth != null && exists(path)
+          return dating() && exists(path)
             && pair.users is list && pair.users.size() == 2
             && validUid(pair.users[0]) && validUid(pair.users[1])
             && pair.users[0] < pair.users[1]
             && matchId == matchIdFor(pair.users[0],pair.users[1])
             && pair.isActive is bool && pair.createdAt is timestamp
+            && eligible(pair.users[0]) && eligible(pair.users[1])
             && request.auth.uid in pair.users;
         }
-        // El historial se conserva legible al desactivar el match.
+        function verifiedUpload() {
+          let a = get(/databases/$(database)/documents/chatUploads/$(matchId + '.' + messageId)).data;
+          return a.state == 'ready' && a.expiresAt > request.time
+            && a.uid == request.auth.uid && a.matchId == matchId
+            && a.path == request.resource.data.mediaPath
+            && a.type == request.resource.data.type
+            && (!request.resource.data.keys().hasAny(['durationMs'])
+              || (a.durationMs is int && a.durationMs > 0 && a.durationMs <= 61500
+                && request.resource.data.durationMs >= a.durationMs - 1500
+                && request.resource.data.durationMs <= a.durationMs + 1500));
+        }
+        // El historial de texto se conserva al desactivar el match.
         allow get: if participant();
         allow list: if participant()
           && request.query.limit != null && request.query.limit <= maxChatHistory();
@@ -270,7 +334,11 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
           && getAfter(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
           && request.resource.data.keys().hasAll(['senderId','text','createdAt'])
-          && request.resource.data.keys().hasOnly(['senderId','text','createdAt','type','mediaPath'])
+          && request.resource.data.keys().hasOnly(['senderId','text','createdAt','type','mediaPath','durationMs'])
+          && (!request.resource.data.keys().hasAny(['durationMs'])
+            || (request.resource.data.get('type','text') == 'audio'
+              && request.resource.data.durationMs is int
+              && request.resource.data.durationMs > 0 && request.resource.data.durationMs <= 60000))
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
           && ((request.resource.data.get('type', 'text') == 'text'
@@ -279,11 +347,16 @@ service cloud.firestore {
             && request.resource.data.text.size() <= maxMessageLength()
             && trimmedText(request.resource.data.text))
             || (request.resource.data.get('type', 'text') in ['image', 'audio']
+              && verifiedUpload()
               && request.resource.data.text == ''
               && request.resource.data.mediaPath == 'chat_media/' + matchId + '/' + request.auth.uid + '/' + messageId))
           && request.resource.data.createdAt is timestamp
           && request.resource.data.createdAt == request.time;
         allow update: if participant()
+          && get(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
+          && getAfter(/databases/$(database)/documents/matches/$(matchId)).data.isActive == true
+          && noBlocksAfter(get(/databases/$(database)/documents/matches/$(matchId)).data.users[0],
+            get(/databases/$(database)/documents/matches/$(matchId)).data.users[1])
           && resource.data.senderId != request.auth.uid
           && !resource.data.keys().hasAny(['readAt'])
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])

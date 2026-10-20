@@ -32,14 +32,22 @@ class DiscoveryPreferences {
     required this.minAge,
     required this.maxAge,
     required this.preferredGender,
+    this.careerIds = const [],
   });
   final int minAge, maxAge;
   final String preferredGender;
+
+  /// Vacío conserva el comportamiento anterior: cualquier carrera.
+  final List<String> careerIds;
+  bool acceptsCareer(String id) => careerIds.isEmpty || careerIds.contains(id);
   bool get isValid =>
       minAge >= DiscoveryLimits.minAge &&
       minAge <= maxAge &&
       maxAge <= DiscoveryLimits.maxAge &&
-      PreferredGender.isValid(preferredGender);
+      PreferredGender.isValid(preferredGender) &&
+      careerIds.length <= 5 &&
+      careerIds.toSet().length == careerIds.length &&
+      careerIds.every((id) => RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(id));
   bool accepts({
     required String gender,
     required DateTime birthDate,
@@ -64,11 +72,13 @@ class DiscoveryPreferences {
         minAge: data['minAge'] as int,
         maxAge: data['maxAge'] as int,
         preferredGender: data['preferredGender'] as String,
+        careerIds: List<String>.from(data['careerIds'] as List? ?? []),
       );
   Map<String, dynamic> toFirestore() => {
     'minAge': minAge,
     'maxAge': maxAge,
     'preferredGender': preferredGender,
+    'careerIds': careerIds,
     'updatedAt': FieldValue.serverTimestamp(),
   };
 }

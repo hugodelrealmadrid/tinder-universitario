@@ -118,7 +118,16 @@ class DiscoveryService {
             .get(const GetOptions(source: Source.server));
         if (!card.exists) continue;
         final candidate = DiscoveryCandidate.fromMap(card.id, card.data()!);
-        if (candidate.eligibleFor(_uid!, _preferences!, _decided) &&
+        if (candidate.eligibleFor(
+              _uid!,
+              _preferences!,
+              _decided,
+              demoMode:
+                  const bool.fromEnvironment('TINDER_DEMO') &&
+                  _db.app.options.projectId == 'demo-tinder-universitario' &&
+                  _db.app.options.storageBucket ==
+                      'demo-tinder-universitario.appspot.com',
+            ) &&
             careerNames.containsKey(candidate.careerId)) {
           return candidate;
         }

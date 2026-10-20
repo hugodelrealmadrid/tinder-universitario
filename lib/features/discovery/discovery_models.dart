@@ -1,5 +1,11 @@
 import '../preferences/discovery_preferences.dart';
 import '../profile/student_profile.dart';
+import '../profile/private_photo_path.dart';
+
+/// HTTP solo para fotografías del bucket y origen exactos del demo.
+bool validCandidatePhoto(String value, {bool demoMode = false}) {
+  return isPrivatePhotoPath(value);
+}
 
 abstract final class SwipeDecision {
   static const like = 'like', pass = 'pass';
@@ -29,10 +35,12 @@ class DiscoveryCandidate {
     required this.interestIds,
     required this.description,
     required this.isActive,
+    this.photoUrls = const [],
   });
   final String id, firstName, gender, careerId, mainPhotoUrl, description;
   final int age;
   final List<String> interestIds;
+  final List<String> photoUrls;
   final bool isActive;
   factory DiscoveryCandidate.fromMap(String id, Map<String, dynamic> data) =>
       DiscoveryCandidate(
@@ -45,18 +53,21 @@ class DiscoveryCandidate {
         interestIds: List<String>.from(data['interestIds'] as List),
         description: data['description'] as String,
         isActive: data['isActive'] == true,
+        photoUrls: List<String>.from(data['photoUrls'] as List? ?? []),
       );
   bool eligibleFor(
     String viewer,
     DiscoveryPreferences preferences,
-    Set<String> decided,
-  ) =>
+    Set<String> decided, {
+    bool demoMode = false,
+  }) =>
       id != viewer &&
       isActive &&
       firstName.trim().isNotEmpty &&
       careerId.isNotEmpty &&
       ProfileGender.isValid(gender) &&
-      Uri.tryParse(mainPhotoUrl)?.scheme == 'https' &&
+      validCandidatePhoto(mainPhotoUrl, demoMode: demoMode) &&
       !decided.contains(id) &&
+      preferences.acceptsCareer(careerId) &&
       preferences.acceptsAge(gender: gender, age: age);
 }

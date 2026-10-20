@@ -1,3 +1,4 @@
+import '../features/profile/private_profile_photo.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
@@ -19,7 +20,19 @@ class AppMark extends StatelessWidget {
   );
 }
 
-class AppPhoto extends StatelessWidget {
+/// Nunca incorpora la URL, el token ni el texto de la excepción al diagnóstico.
+String photoFailureCode(Object error) {
+  if (error is NetworkImageLoadException) {
+    return switch (error.statusCode) {
+      401 || 403 => 'access-denied',
+      404 => 'not-found',
+      _ => 'network',
+    };
+  }
+  return 'load-failed';
+}
+
+class AppPhoto extends StatefulWidget {
   const AppPhoto({
     super.key,
     required this.url,
@@ -27,6 +40,41 @@ class AppPhoto extends StatelessWidget {
   });
   final String? url;
   final String label;
+  @override
+  State<AppPhoto> createState() => _AppPhotoState();
+}
+
+class _AppPhotoState extends State<AppPhoto> {
+  bool _reported = false;
+  int _attempt = 0;
+  @override
+  void didUpdateWidget(covariant AppPhoto oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) _reported = false;
+  }
+
+  Future<void> _retry() async {
+    setState(() {
+      _attempt++;
+      _reported = false;
+    });
+  }
+
+  Widget _failed(Object error) {
+    if (!_reported) {
+      _reported = true;
+      debugPrint('AppPhoto: ${photoFailureCode(error)}');
+    }
+    return Tooltip(
+      message: 'No se pudo cargar la fotografía. Pulsa para reintentar.',
+      child: Semantics(
+        label: 'Fotografía no disponible. Reintentar',
+        button: true,
+        child: InkWell(onTap: _retry, child: _placeholder(failed: true)),
+      ),
+    );
+  }
+
   Widget _placeholder({bool failed = false}) => ColoredBox(
     color: AppColors.rose,
     child: Center(
@@ -41,32 +89,15 @@ class AppPhoto extends StatelessWidget {
   );
   @override
   Widget build(BuildContext context) => Semantics(
-    label: label,
+    label: widget.label,
     image: true,
-    child: url == null || url!.isEmpty
+    child: widget.url == null || widget.url!.isEmpty
         ? _placeholder()
-        : Image.network(
-            url!,
-            fit: BoxFit.cover,
-            width: double.infinity,
-            height: double.infinity,
-            webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
-            excludeFromSemantics: true,
-            loadingBuilder: (context, child, progress) => progress == null
-                ? child
-                : Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _placeholder(),
-                      const Center(
-                        child: SizedBox.square(
-                          dimension: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    ],
-                  ),
-            errorBuilder: (context, error, stack) => _placeholder(failed: true),
+        : PrivateProfilePhoto(
+            key: ValueKey('${widget.url}:$_attempt'),
+            path: widget.url!,
+            placeholder: _placeholder(),
+            failure: (error, retry) => _failed(error),
           ),
   );
 }

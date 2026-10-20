@@ -34,5 +34,9 @@ abstract final class DiscoveryPublication {
       'updatedAt': user['updatedAt'],
     });
     tx.set(db.collection('discoveryCards').doc(uid), card(user));
+    tx.set(db.collection('matchProfiles').doc(uid), {
+      ...card(user),
+      'photoUrls': user['photoUrls'],
+    });
   }
 }

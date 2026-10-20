@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'chat_media_widget.dart';
+import 'chat_media_validation.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_ui.dart';
 
@@ -14,6 +15,8 @@ import 'chat_message.dart';
 import 'chat_service.dart';
 import '../safety/safety_dialog.dart';
 import '../safety/safety_service.dart';
+import '../matches/match_profile_screen.dart';
+import 'voice_note_recorder.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -43,6 +46,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late Stream<List<ChatMessage>> _messages;
   final _draft = TextEditingController();
   bool _sending = false;
+  bool _voiceBusy = false;
   bool _closing = false;
   String? _sendError;
 
@@ -51,6 +55,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _listen();
+    _service.recoverPendingMedia(widget.uid).catchError((_) {});
   }
 
   void _listen() {
@@ -58,7 +63,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _messages = _service.watchMessages(widget.matchId);
   }
 
-  void _readVisible(ChatMessage message) {
+  void _readVisible(ChatMessage message, BuildContext rowContext) {
     if (message.isOwn(widget.uid) ||
         message.readAt != null ||
         message.createdAt == null ||
@@ -70,6 +75,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        _reading.remove(message.id);
+        return;
+      }
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      final box = rowContext.mounted ? rowContext.findRenderObject() : null;
+      final scrollable = rowContext.mounted
+          ? Scrollable.maybeOf(rowContext)
+          : null;
+      final viewport = scrollable?.context.findRenderObject();
+      if ((lifecycle != null && lifecycle != AppLifecycleState.resumed) ||
+          box is! RenderBox ||
+          viewport is! RenderBox ||
+          !box.attached ||
+          !viewport.attached ||
+          !box.hasSize ||
+          !viewport.hasSize ||
+          !(box.localToGlobal(Offset.zero) & box.size).overlaps(
+            viewport.localToGlobal(Offset.zero) & viewport.size,
+          )) {
         _reading.remove(message.id);
         return;
       }
@@ -87,7 +111,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _attach(bool audio) async {
-    if (_sending || _closing) return;
+    if (_sending || _closing || _voiceBusy) return;
     setState(() {
       _sending = true;
       _sendError = null;
@@ -97,7 +121,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final result = await FilePicker.platform.pickFiles(
           type: FileType.custom,
           allowedExtensions: ['mp3', 'm4a', 'wav', 'ogg'],
-          withData: true,
+          withData: false,
+          withReadStream: true,
         );
         if (!mounted || result == null) return;
         final file = result.files.single;
@@ -107,13 +132,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'wav': 'audio/wav',
           'ogg': 'audio/ogg',
         }[file.extension?.toLowerCase()];
-        if (mime == null || file.bytes == null) {
+        if (mime == null || file.readStream == null) {
           throw const ChatException('Formato de audio no compatible.');
         }
+        if (file.size <= 0 || file.size > ChatMediaValidation.audioLimit) {
+          throw const ChatException('Audio: máximo 15 MB.');
+        }
+        final bytes = await ChatMediaValidation.readBounded(
+          file.readStream!,
+          ChatMediaValidation.audioLimit,
+        );
+        if (!mounted) return;
         await _service.sendMedia(
           widget.matchId,
           widget.uid,
-          file.bytes!,
+          bytes,
           'audio',
           mime,
         );
@@ -124,6 +157,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           imageQuality: 85,
         );
         if (!mounted || file == null) return;
+        if (await file.length() > ChatMediaValidation.imageLimit) {
+          throw const ChatException('Imagen: máximo 5 MB.');
+        }
         final bytes = await file.readAsBytes();
         final mime = bytes.length >= 3 && bytes[0] == 255 && bytes[1] == 216
             ? 'image/jpeg'
@@ -222,8 +258,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(unmatchError(error))));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(unmatchError(error))));
       }
     } finally {
       if (mounted) setState(() => _closing = false);
@@ -268,7 +305,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               return PopupMenuButton<String>(
                 key: const ValueKey('chat-options'),
                 tooltip: 'Opciones del chat',
-                enabled: !_closing && !_sending,
+                enabled: !_closing && !_sending && !_voiceBusy,
                 onSelected: (value) => value == 'unmatch'
                     ? _confirmUnmatch()
                     : _safety(
@@ -296,24 +333,39 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
         ],
         leading: BackButton(onPressed: () => Navigator.of(context).pop()),
-        title: Row(
-          children: [
-            ClipOval(
-              child: SizedBox(
-                width: 36,
-                height: 36,
-                child: AppPhoto(url: profile?.mainPhotoUrl),
-              ),
+        title: InkWell(
+          onTap: profile == null || _voiceBusy || _sending
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => MatchProfileScreen(
+                      viewer: widget.uid,
+                      target: profile.id,
+                    ),
+                  ),
+                ),
+          child: Tooltip(
+            message: 'Ver perfil del match',
+            child: Row(
+              children: [
+                ClipOval(
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: AppPhoto(url: profile?.mainPhotoUrl),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    profile?.firstName ?? 'Perfil no disponible',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                profile?.firstName ?? 'Perfil no disponible',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
       body: SafeArea(
@@ -359,26 +411,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               child: AppEmptyState(
                                 icon: Icons.waving_hand_outlined,
                                 title: 'Aún no hay mensajes. ¡Saluda!',
-                                message: 'Un hola puede ser el comienzo de una buena conversación.',
+                                message:
+                                    'Un hola puede ser el comienzo de una buena conversación.',
                               ),
                             );
                           }
                           // reverse ancla la vista al final; arriba sigue lo más antiguo.
-                          return ListView.builder(
-                            reverse: true,
-                            padding: const EdgeInsets.all(16),
-                            itemCount: messages.length,
-                            itemBuilder: (context, index) {
-                              final message =
-                                  messages[messages.length - 1 - index];
-                              _readVisible(message);
-                              return MessageBubble(
-                                key: ValueKey(message.id),
-                                message: message,
-                                service: _service,
-                                own: message.isOwn(widget.uid),
-                              );
+                          return NotificationListener<ScrollNotification>(
+                            onNotification: (notification) {
+                              if (notification is ScrollEndNotification &&
+                                  mounted) {
+                                setState(() {});
+                              }
+                              return false;
                             },
+                            child: ListView.builder(
+                              reverse: true,
+                              padding: const EdgeInsets.all(16),
+                              itemCount: messages.length,
+                              itemBuilder: (context, index) {
+                                final message =
+                                    messages[messages.length - 1 - index];
+                                return Builder(
+                                  builder: (rowContext) {
+                                    if (active) {
+                                      _readVisible(message, rowContext);
+                                    }
+                                    return MessageBubble(
+                                      key: ValueKey(message.id),
+                                      message: message,
+                                      service: _service,
+                                      own: message.isOwn(widget.uid),
+                                      mediaAllowed: active,
+                                    );
+                                  },
+                                );
+                              },
+                            ),
                           );
                         },
                       ),
@@ -403,6 +472,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                         ),
                       ),
+                    VoiceNoteRecorder(
+                      enabled: active && !_sending && !_closing,
+                      onBusy: (busy) {
+                        if (mounted) setState(() => _voiceBusy = busy);
+                      },
+                      onSend: (bytes) => _service.sendMedia(
+                        widget.matchId,
+                        widget.uid,
+                        bytes,
+                        'audio',
+                        'audio/wav',
+                        durationMs: ((bytes.length - 44) / 32).round(),
+                      ),
+                    ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                       child: Row(
@@ -411,14 +494,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           IconButton(
                             tooltip: 'Enviar imagen',
                             icon: const Icon(Icons.image_outlined),
-                            onPressed: active && !_sending && !_closing
+                            onPressed:
+                                active && !_sending && !_closing && !_voiceBusy
                                 ? () => _attach(false)
                                 : null,
                           ),
                           IconButton(
                             tooltip: 'Enviar audio',
                             icon: const Icon(Icons.audio_file_outlined),
-                            onPressed: active && !_sending && !_closing
+                            onPressed:
+                                active && !_sending && !_closing && !_voiceBusy
                                 ? () => _attach(true)
                                 : null,
                           ),
@@ -426,7 +511,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                             child: TextField(
                               key: const ValueKey('chat-draft'),
                               controller: _draft,
-                              enabled: active && !_sending && !_closing,
+                              enabled:
+                                  active &&
+                                  !_sending &&
+                                  !_closing &&
+                                  !_voiceBusy,
                               minLines: 1,
                               maxLines: 4,
                               textCapitalization: TextCapitalization.sentences,
@@ -450,7 +539,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                 minimumSize: const Size(52, 52),
                               ),
                               tooltip: _sending ? 'Enviando' : 'Enviar',
-                              onPressed: active && !_sending && !_closing
+                              onPressed:
+                                  active &&
+                                      !_sending &&
+                                      !_closing &&
+                                      !_voiceBusy
                                   ? _send
                                   : null,
                               icon: _sending
@@ -497,10 +590,12 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     required this.own,
     this.service,
+    this.mediaAllowed = true,
   });
   final ChatService? service;
   final ChatMessage message;
   final bool own;
+  final bool mediaAllowed;
 
   @override
   Widget build(BuildContext context) {
@@ -528,12 +623,16 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (message.mediaPath != null)
+              if (message.mediaPath != null && mediaAllowed)
                 ChatMediaWidget(
+                  key: ValueKey(message.mediaPath),
                   path: message.mediaPath!,
                   type: message.type,
+                  durationMs: message.durationMs,
                   service: service,
                 ),
+              if (message.mediaPath != null && !mediaAllowed)
+                const Text('Archivo no disponible: el match está inactivo.'),
               if (message.text.isNotEmpty)
                 Text(
                   message.text,

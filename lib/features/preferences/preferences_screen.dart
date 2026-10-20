@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../auth/auth_service.dart' show firebaseError;
 import 'discovery_preferences.dart';
 import 'preferences_service.dart';
+import '../profile/student_profile.dart';
 
 class PreferencesScreen extends StatefulWidget {
   const PreferencesScreen({
@@ -23,6 +24,8 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
   final _form = GlobalKey<FormState>();
   int _min = DiscoveryLimits.minAge, _max = DiscoveryLimits.maxAge;
   String? _gender;
+  List<CatalogItem> _careers = [];
+  Set<String> _careerIds = {};
   bool _loading = true, _saving = false;
   String? _error, _notice;
   @override
@@ -38,10 +41,13 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
     });
     try {
       final value = await _service.load(widget.uid);
+      final careers = await _service.careers();
+      if (mounted) setState(() => _careers = careers);
       if (mounted && value != null) {
         setState(() {
           _min = value.minAge;
           _max = value.maxAge;
+          _careerIds = value.careerIds.toSet();
           _gender = PreferredGender.isValid(value.preferredGender)
               ? value.preferredGender
               : null;
@@ -68,6 +74,7 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
           minAge: _min,
           maxAge: _max,
           preferredGender: _gender!,
+          careerIds: _careerIds.toList()..sort(),
         ),
       );
       if (mounted) {
@@ -157,11 +164,53 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                         const SectionHeading(
                           'Rango de edad',
                           icon: Icons.tune_rounded,
-                          subtitle: 'Entre 18 y 100 años',
+                          subtitle: 'Selecciona el rango de edad',
                         ),
                         _ageField('Edad mínima', _min, (value) => _min = value),
                         const SizedBox(height: 20),
                         _ageField('Edad máxima', _max, (value) => _max = value),
+                        const SectionHeading(
+                          'Carreras de interés',
+                          icon: Icons.school_outlined,
+                          subtitle:
+                              'Hasta 5 carreras. Sin selección: todas. La compatibilidad es recíproca.',
+                        ),
+                        for (final id in _careerIds.where(
+                          (id) => !_careers.any((c) => c.id == id),
+                        ))
+                          ListTile(
+                            title: const Text('Carrera ya no disponible'),
+                            trailing: IconButton(
+                              tooltip: 'Quitar carrera no disponible',
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(() => _careerIds.remove(id)),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ),
+                        Wrap(
+                          spacing: 8,
+                          children: _careers
+                              .map(
+                                (career) => FilterChip(
+                                  label: Text(career.name),
+                                  selected: _careerIds.contains(career.id),
+                                  onSelected: _saving
+                                      ? null
+                                      : (selected) => setState(() {
+                                          if (!selected) {
+                                            _careerIds.remove(career.id);
+                                          } else if (_careerIds.length < 5) {
+                                            _careerIds.add(career.id);
+                                          } else {
+                                            _error =
+                                                'Selecciona como máximo 5 carreras.';
+                                          }
+                                        }),
+                                ),
+                              )
+                              .toList(),
+                        ),
                         if (_error != null) AppNotice(_error!, error: true),
                         if (_notice != null) AppNotice(_notice!),
                         const SizedBox(height: 24),
