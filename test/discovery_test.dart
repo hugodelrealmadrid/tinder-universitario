@@ -28,8 +28,8 @@ void main() {
     'gender': ProfileGender.female,
     'description': 'Lectura y música',
     'careerId': 'sistemas',
-    'photoUrls': ['https://example.test/photo.jpg'],
-    'mainPhotoUrl': 'https://example.test/photo.jpg',
+    'photoUrls': ['profile_photos/bob/photo'],
+    'mainPhotoUrl': 'profile_photos/bob/photo',
     'interestIds': ['musica'],
     'role': 'user',
     'isActive': true,
@@ -53,7 +53,7 @@ void main() {
   DiscoveryCandidate candidate({
     String id = 'bob',
     bool active = true,
-    String photo = 'https://example.test/photo.jpg',
+    String photo = 'profile_photos/bob/photo',
   }) => DiscoveryCandidate(
     id: id,
     firstName: 'Bob',

@@ -169,6 +169,11 @@ void main() {
       await service.ensureProfile(TestUser());
       // Este test conserva la regresión de entrada normal con cuenta verificada.
       auth.current = TestUser(verified: true);
+      await db.doc('accountAccess/ana').set({
+        'role': 'user',
+        'verificationStatus': 'approved',
+        'suspended': false,
+      });
       await tester.pumpWidget(MaterialApp(home: AuthGate(service: service)));
       await tester.pumpAndSettle();
       expect(find.text('Univalle · Cochabamba'), findsOneWidget);

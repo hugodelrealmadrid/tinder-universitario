@@ -55,6 +55,68 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('Historial de match cerrado no genera nuevas confirmaciones', (
+    tester,
+  ) async {
+    await seedMessage(1, sender: 'bob');
+    await db.doc('matches/ana.bob').update(StudentMatch.closeFields('ana'));
+    await open(tester);
+    expect(find.text('Mensaje 1'), findsOneWidget);
+    expect(
+      (await db.doc('matches/ana.bob/messages/m1').get()).data()!.containsKey(
+        'readAt',
+      ),
+      isFalse,
+    );
+  });
+
+  testWidgets('Solo mensajes dentro de la pantalla reciben readAt', (
+    tester,
+  ) async {
+    for (var i = 1; i <= 30; i++) {
+      await seedMessage(i, sender: 'bob');
+    }
+    await open(tester);
+    expect(
+      (await db.doc('matches/ana.bob/messages/m30').get()).data()!['readAt'],
+      isA<Timestamp>(),
+    );
+    expect(
+      (await db.doc('matches/ana.bob/messages/m1').get()).data()!.containsKey(
+        'readAt',
+      ),
+      isFalse,
+    );
+    for (var i = 0; i < 5; i++) {
+      await tester.drag(find.byType(ListView), const Offset(0, 700));
+      await tester.pumpAndSettle();
+    }
+    expect(
+      (await db.doc('matches/ana.bob/messages/m1').get()).data()!['readAt'],
+      isA<Timestamp>(),
+    );
+  });
+
+  testWidgets('Mensajes no se marcan mientras la aplicación está pausada', (
+    tester,
+  ) async {
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await seedMessage(1, sender: 'bob');
+    await open(tester);
+    expect(
+      (await db.doc('matches/ana.bob/messages/m1').get()).data()!.containsKey(
+        'readAt',
+      ),
+      isFalse,
+    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(
+      (await db.doc('matches/ana.bob/messages/m1').get()).data()!['readAt'],
+      isA<Timestamp>(),
+    );
+  });
+
   test(
     'Mensaje válido persiste solo los tres campos y timestamp del servidor',
     () async {

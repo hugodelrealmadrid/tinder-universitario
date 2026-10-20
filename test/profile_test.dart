@@ -77,6 +77,39 @@ void main() {
     });
   });
 
+  testWidgets(
+    'Vista previa muestra borrador sin guardar y conserva edición al volver',
+    (tester) async {
+      final before = (await db.doc('users/ana').get()).data();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProfileScreen(
+            uid: 'ana',
+            service: service,
+            logout: const Text('Cerrar sesión'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final name = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == 'Nombre *',
+      );
+      await tester.enterText(name, 'Nombre sin guardar');
+      await tester.ensureVisible(find.byKey(const ValueKey('profile-preview')));
+      await tester.tap(find.byKey(const ValueKey('profile-preview')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Nombre sin guardar'), findsOneWidget);
+      expect((await db.doc('users/ana').get()).data(), before);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(name).controller!.text,
+        'Nombre sin guardar',
+      );
+      expect((await db.doc('users/ana').get()).data(), before);
+    },
+  );
+
   test('Guardado parcial inactivo sin alterar campos protegidos', () async {
     final result = await service.save(
       'ana',

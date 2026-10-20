@@ -7,6 +7,32 @@ import 'package:tinder_universitario/features/chat/chat_screen.dart';
 import 'package:tinder_universitario/features/chat/chat_service.dart';
 
 void main() {
+  for (final type in ['text', 'image', 'audio']) {
+    test(
+      'Recibo para $type conserva el contenido y no lo escribe el remitente',
+      () async {
+        final db = FakeFirebaseFirestore();
+        final service = ChatService(firestore: db);
+        final data = <String, dynamic>{
+          'senderId': 'bob',
+          'type': type,
+          'text': type == 'text' ? 'Hola' : '',
+          'createdAt': Timestamp.now(),
+          if (type != 'text') 'mediaPath': 'chat_media/ana.bob/bob/m',
+        };
+        final ref = db.doc('matches/ana.bob/messages/m');
+        await ref.set(data);
+        final message = ChatMessage.fromMap('m', data);
+        await service.markRead('ana.bob', 'bob', message);
+        expect((await ref.get()).data()!.containsKey('readAt'), false);
+        await service.markRead('ana.bob', 'ana', message);
+        final after = (await ref.get()).data()!;
+        expect(after['readAt'], isA<Timestamp>());
+        after.remove('readAt');
+        expect(after, data);
+      },
+    );
+  }
   test('Solo marca mensajes recibidos y conserva el contenido', () async {
     final db = FakeFirebaseFirestore();
     final service = ChatService(firestore: db);

@@ -28,6 +28,17 @@ android {
         versionName = flutter.versionName
     }
 
+    // Demo con identidad y configuración nativas separadas; nunca instalar el
+    // APK standard para pruebas con emuladores.
+    flavorDimensions += "environment"
+    productFlavors {
+        create("standard") { dimension = "environment" }
+        create("demo") {
+            dimension = "environment"
+            applicationIdSuffix = ".demo"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

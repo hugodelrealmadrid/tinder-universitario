@@ -89,9 +89,14 @@ void main() {
   late FakeFirebaseFirestore db;
   late AuthService service;
   late DateTime now;
-  setUp(() {
+  setUp(() async {
     auth = _Auth();
     db = FakeFirebaseFirestore();
+    await db.doc('accountAccess/ana').set({
+      'role': 'user',
+      'verificationStatus': 'approved',
+      'suspended': false,
+    });
     now = DateTime.utc(2026, 10, 5);
     service = AuthService(auth: auth, firestore: db, now: () => now);
   });

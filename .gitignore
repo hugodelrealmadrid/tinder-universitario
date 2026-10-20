@@ -48,3 +48,16 @@ app.*.map.json
 /tool/node_modules/
 /.firebase/
 *service-account*.json
+
+/tool/ffmpeg/
+
+# Evidencias locales: pueden contener identificadores, sesiones o datos del demo.
+/audit-*.json
+/audit-*.patch
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+**/key.properties
+**/*serviceAccount*.json
