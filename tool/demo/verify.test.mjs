@@ -40,11 +40,23 @@ for(const [uid,email,other] of [['manual_ana','ana.manual@demo.test','manual_bob
     const profile=(await getDoc(doc(db,'users',uid))).data();
     assert.equal(profile.isActive,true);assert.equal(profile.gender,uid==='manual_ana'?'femenino':'masculino');
     assert.ok(profile.firstName&&profile.lastName&&profile.birthDate&&profile.careerId);
-    assert.equal(profile.mainPhotoUrl,`profile_photos/${uid}/main`);
-    assert.deepEqual(profile.photoUrls,[profile.mainPhotoUrl]);
+    // Las pruebas manuales pueden cambiar la principal y la galería. Validar el
+    // contrato privado actual, sin exigir que permanezcan las fotos del seed.
+    assert.ok(Array.isArray(profile.photoUrls));
+    assert.ok(profile.photoUrls.length>=1&&profile.photoUrls.length<=6);
+    assert.equal(new Set(profile.photoUrls).size,profile.photoUrls.length);
+    assert.ok(profile.photoUrls.includes(profile.mainPhotoUrl));
+    for(const path of profile.photoUrls) {
+      assert.match(path,new RegExp(`^profile_photos/${uid}/[A-Za-z0-9_-]{1,128}$`));
+      await assertFails(getMetadata(ref(context.storage(bucket),path)));
+      const image=await fetch('http://127.0.0.1:7357/__demo/api/profile/media/'+encodeURIComponent(path),{headers:{Authorization:'Bearer '+login.idToken}});
+      assert.equal(image.status,200);assert.match(image.headers.get('content-type'),/^image\//);
+      assert.equal(image.headers.get('cache-control'),'no-store');
+      assert.ok((await image.arrayBuffer()).byteLength>0);
+    }
     assert.equal((await getDoc(doc(db,'matches/manual_ana.manual_bob'))).data().isActive,true);
     assert.equal((await getDoc(doc(db,'discoveryCards',other))).exists(),true);
-    await assertFails(getMetadata(ref(context.storage(bucket),`profile_photos/${uid}/main`)));
+    await assertFails(getMetadata(ref(context.storage(bucket),profile.mainPhotoUrl)));
     const photo=await fetch('http://127.0.0.1:7357/__demo/api/profile/media/'+encodeURIComponent(profile.mainPhotoUrl),{headers:{Authorization:'Bearer '+login.idToken}});assert.equal(photo.status,200);assert.equal(photo.headers.get('cache-control'),'no-store');await photo.body.cancel();
     const real=`https://firebasestorage.googleapis.com/v0/b/tinder-universitario.firebasestorage.app/o/profile_photos%2F${uid}%2Fmain?alt=media&token=abc-123`;
     await assertFails(updateDoc(doc(db,'users',uid),{photoUrls:[real],mainPhotoUrl:real,updatedAt:serverTimestamp()}));
