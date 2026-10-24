@@ -1,15 +1,13 @@
 import {FieldValue,Timestamp,FieldPath} from 'firebase-admin/firestore';
 import {assetRef,chatPath,removeAsset} from './chat-upload.mjs';
-const cursors=new Map();
 export async function cleanupMedia(b,now=Date.now()){
  for(const collection of ['chatUploads','profilePhotoAssets']){
   // Reconciliar también publicaciones que perdieron su referencia después de
   // vencer el staging (p. ej. cierre del cliente antes de pedir eliminación).
-  const cursorKey=b.db.projectId+collection;
+  const cursorRef=b.db.doc('maintenanceCursors/'+collection),cursor=(await cursorRef.get()).data()?.after;
   let published=b.db.collection(collection).where('state','==','published').orderBy(FieldPath.documentId());
-  if(cursors.has(cursorKey))published=published.startAfter(cursors.get(cursorKey));
+  if(cursor)published=published.startAfter(cursor);
   const page=await published.limit(50).get();
-  if(page.size===50)cursors.set(cursorKey,page.docs.at(-1).id);else cursors.delete(cursorKey);
   for(const doc of page.docs)await b.db.runTransaction(async tx=>{
    const v=(await tx.get(doc.ref)).data();if(v?.state!=='published')return;
    let referenced;
@@ -17,6 +15,7 @@ export async function cleanupMedia(b,now=Date.now()){
    else {const user=(await tx.get(b.db.doc('users/'+v.uid))).data(),manifest=b.db.doc('profilePhotoManifests/'+v.uid),m=await tx.get(manifest);referenced=user?.photoUrls?.includes(v.path);if(!referenced)tx.set(manifest,{paths:(m.data()?.paths??[]).filter(p=>p!==v.path)});}
    if(!referenced)tx.update(doc.ref,{state:'deleting',expiresAt:Timestamp.now()});
   });
+  await cursorRef.set({after:page.size===50?page.docs.at(-1).id:null});
   // Solo tareas vencidas; los errores se reprograman y no bloquean la cola.
   const q=await b.db.collection(collection).where('expiresAt','<=',Timestamp.fromMillis(now)).orderBy('expiresAt').limit(50).get();
   for(const doc of q.docs){

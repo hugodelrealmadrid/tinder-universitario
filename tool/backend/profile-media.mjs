@@ -21,12 +21,16 @@ export async function deletePhoto(b,uid,path){const p=photoPath(path);if(uid!==p
  if(asset.data().path!==path)throw new AccessError('permission-denied');tx.set(manifest(b,uid),{paths:(m.data()?.paths??[]).filter(v=>v!==path)});tx.update(ref,{state:'deleting',expiresAt:Timestamp.now()});return asset.data();});if(a)await removeAsset(b,ref,a);return {deleted:true};}
 // La autorización de otras personas se delega a las MISMAS reglas de las fichas.
 // No duplicar aquí filtros de edad/carrera, bloqueos, visibilidad o matches.
-async function permittedCard(b,token,uid,path){
+export async function permittedCard(b,token,uid,path){
  const claims=await b.auth.verifyIdToken(token,true);if(claims.uid!==uid)throw new AccessError('permission-denied');
  const owner=photoPath(path)[1],project=b.db.projectId,host=process.env.FIRESTORE_EMULATOR_HOST;
- if(!project.startsWith('demo-')||!/^127\.0\.0\.1:(8088|8188)$/.test(host))throw new AccessError('permission-denied');
+ const origin=b.firestoreOrigin;
+ const remote=origin==='https://firestore.googleapis.com'&&!project.startsWith('demo-')&&!host;
+ const local=project.startsWith('demo-')&&/^127\.0\.0\.1:(8088|8188)$/.test(host);
+ if(!remote&&!local)throw new AccessError('permission-denied');
+ const base=remote?origin:`http://${host}`;
  for(const collection of ['discoveryCards','matchProfiles']){
-  const r=await fetch(`http://${host}/v1/projects/${project}/databases/(default)/documents/${collection}/${owner}`,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(10000)});
+  const r=await fetch(`${base}/v1/projects/${project}/databases/(default)/documents/${collection}/${owner}`,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(10000)});
   if(r.status!==200){await r.body?.cancel();continue;}
   const d=(await r.json()).fields;
   if(collection==='discoveryCards'&&d.mainPhotoUrl?.stringValue===path)return;

@@ -3,7 +3,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'firebase_options.dart';
+import 'app_environment.dart';
+import 'package:flutter/services.dart' show appFlavor;
 import 'features/auth/auth_gate.dart';
 import 'features/auth/auth_service.dart';
 
@@ -32,10 +33,21 @@ class FirebaseStartup extends StatefulWidget {
 class _FirebaseStartupState extends State<FirebaseStartup> {
   late Future<AuthService> _startup = _initialize();
   Future<AuthService> _initialize() async {
+    final environment = AppEnvironment.configured(web: kIsWeb);
+    environment.validate();
+    if (!kIsWeb && appFlavor != environment.name) {
+      throw StateError('El flavor Android debe coincidir con el entorno.');
+    }
+    if (Firebase.apps.isNotEmpty &&
+        Firebase.apps.any(
+          (app) =>
+              app.options.projectId != environment.projectId ||
+              app.options.appId != environment.appId,
+        )) {
+      throw StateError('La configuración nativa no coincide con el entorno.');
+    }
     if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
+      await Firebase.initializeApp(options: environment.options);
     }
     if (kIsWeb) await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
     return AuthService();

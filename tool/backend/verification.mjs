@@ -8,7 +8,7 @@ function requireThat(ok,code='permission-denied'){if(!ok)throw new AccessError(c
 function id(uid){requireThat(typeof uid==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(uid),'invalid-argument');return uid;}
 const stamp=()=>FieldValue.serverTimestamp();
 export class VerificationBackend {
- constructor({db,bucket,auth}){this.db=db;this.bucket=bucket;this.auth=auth;}
+ constructor({db,bucket,auth,firestoreOrigin}){this.db=db;this.bucket=bucket;this.auth=auth;this.firestoreOrigin=firestoreOrigin;}
  account(uid){return this.db.doc('accountAccess/'+id(uid));}
  request(requestId){return this.db.doc('verificationRequests/'+id(requestId));}
  async actor(tx,uid,administrative=false){

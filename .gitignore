@@ -61,3 +61,9 @@ app.*.map.json
 *.keystore
 **/key.properties
 **/*serviceAccount*.json
+
+# Configuraciones locales del entorno alojado (plantillas públicas en deploy/).
+/deploy/*.local.json
+/deploy/*.local.env
+/android/app/src/production/google-services.json
+/android/app/src/development/google-services.json

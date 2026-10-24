@@ -32,6 +32,11 @@ android {
     // APK standard para pruebas con emuladores.
     flavorDimensions += "environment"
     productFlavors {
+        create("development") {
+            dimension = "environment"
+            applicationIdSuffix = ".development"
+        }
+        create("production") { dimension = "environment" }
         create("standard") { dimension = "environment" }
         create("demo") {
             dimension = "environment"
@@ -39,11 +44,26 @@ android {
         }
     }
 
+    signingConfigs {
+        val storePath = System.getenv("TINDER_KEYSTORE_FILE")
+        val storePasswordValue = System.getenv("TINDER_KEYSTORE_PASSWORD")
+        val aliasValue = System.getenv("TINDER_KEY_ALIAS")
+        val keyPasswordValue = System.getenv("TINDER_KEY_PASSWORD")
+        if (!storePath.isNullOrBlank() && !storePasswordValue.isNullOrBlank() &&
+            !aliasValue.isNullOrBlank() && !keyPasswordValue.isNullOrBlank()) {
+            create("distribution") {
+                storeFile = file(storePath)
+                storePassword = storePasswordValue
+                keyAlias = aliasValue
+                keyPassword = keyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Nunca distribuir un APK release firmado con la clave debug.
+            signingConfig = signingConfigs.findByName("distribution")
         }
     }
 }
@@ -56,4 +76,24 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// No publicar una variante que haya heredado silenciosamente google-services.json.
+tasks.configureEach {
+    for (flavor in listOf("Production", "Development")) {
+        if (name == "process${flavor}DebugGoogleServices" || name == "process${flavor}ReleaseGoogleServices") {
+            doFirst {
+                require(file("src/${flavor.lowercase()}/google-services.json").isFile) {
+                    "Falta la configuración Firebase propia del flavor $flavor."
+                }
+            }
+        }
+    }
+    if (name.startsWith("pre") && name.endsWith("ReleaseBuild")) {
+        doFirst {
+            require(android.signingConfigs.findByName("distribution") != null) {
+                "Configura TINDER_KEYSTORE_FILE, TINDER_KEYSTORE_PASSWORD, TINDER_KEY_ALIAS y TINDER_KEY_PASSWORD fuera del repositorio."
+            }
+        }
+    }
 }
