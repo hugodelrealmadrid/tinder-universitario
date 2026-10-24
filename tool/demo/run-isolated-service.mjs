@@ -1,0 +1,10 @@
+import {spawn} from 'node:child_process';
+import {resolve} from 'node:path';
+import {isolatedEnvironment,prepareIsolation,projectRoot} from '../emulator-isolation.mjs';
+const service=process.argv[2];
+if(process.argv.length!==3||!['backend','web'].includes(service))throw new Error('Use backend or web');
+const p=prepareIsolation('demo'),env=isolatedEnvironment('demo');
+const file=resolve(projectRoot,service==='backend'?'tool/backend/server.mjs':'tool/demo/server.mjs');
+const child=spawn(process.execPath,[file],{cwd:p.run,env,stdio:'inherit',windowsHide:true});
+child.on('error',e=>{console.error(e.message);process.exitCode=1;});
+child.on('exit',code=>{process.exitCode=code??1;});
