@@ -36,9 +36,12 @@ class DiscoveryCandidate {
     required this.description,
     required this.isActive,
     this.photoUrls = const [],
+    this.universityId,
+    this.campusId,
   });
   final String id, firstName, gender, careerId, mainPhotoUrl, description;
   final int age;
+  final String? universityId, campusId;
   final List<String> interestIds;
   final List<String> photoUrls;
   final bool isActive;
@@ -54,12 +57,15 @@ class DiscoveryCandidate {
         description: data['description'] as String,
         isActive: data['isActive'] == true,
         photoUrls: List<String>.from(data['photoUrls'] as List? ?? []),
+        universityId: data['universityId'] as String?,
+        campusId: data['campusId'] as String?,
       );
   bool eligibleFor(
     String viewer,
     DiscoveryPreferences preferences,
     Set<String> decided, {
     bool demoMode = false,
+    String? viewerUniversity,
   }) =>
       id != viewer &&
       isActive &&
@@ -69,5 +75,10 @@ class DiscoveryCandidate {
       validCandidatePhoto(mainPhotoUrl, demoMode: demoMode) &&
       !decided.contains(id) &&
       preferences.acceptsCareer(careerId) &&
+      preferences.acceptsAffiliation(
+        viewerUniversity,
+        universityId,
+        interestIds,
+      ) &&
       preferences.acceptsAge(gender: gender, age: age);
 }

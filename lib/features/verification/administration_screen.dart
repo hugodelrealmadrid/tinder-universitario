@@ -1,8 +1,16 @@
+import 'academic_admin_screen.dart';
+import 'admin_dossier.dart';
+import 'admin_theme.dart';
+import 'admin_visual.dart';
+import 'admin_workspace.dart';
+import 'audit_presentation.dart';
+import '../../widgets/app_ui.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'account_access.dart';
+import '../academics/catalog_admin_screen.dart';
 import 'backend_client.dart';
 import 'university_verification_screen.dart';
 
@@ -124,18 +132,22 @@ class AdministrationScreen extends StatefulWidget {
     required this.uid,
     required this.logout,
     required this.onDating,
+    this.initialPage = 'dashboard',
   });
   final VerificationClient client;
   final AccountAccess access;
   final String uid;
   final Widget logout;
   final VoidCallback onDating;
+  final String initialPage;
   @override
   State<AdministrationScreen> createState() => _AdministrationScreenState();
 }
 
 class _AdministrationScreenState extends State<AdministrationScreen> {
   String _section = 'requests', _status = 'pending';
+  String _page = 'dashboard';
+  String? _dossierUid;
   List<Map<String, dynamic>> _items = [];
   bool _busy = false, _more = false;
   String? _error, _notice;
@@ -145,7 +157,48 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.access.canAdminister) _load();
+    _page = widget.access.canDate ? widget.initialPage : 'requests';
+    _section = _page == 'roles' || _page == 'accounts' ? 'accounts' : _page;
+    if (widget.access.canAdminister && _page == 'requests') {
+      _load();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AdministrationScreen old) {
+    super.didUpdateWidget(old);
+    if (!widget.access.canAdminister) {
+      _items = [];
+      _account = null;
+      _page = 'requests';
+      return;
+    }
+    final forbidden =
+        (!_root && ['audit', 'roles', 'universities'].contains(_page)) ||
+        (!widget.access.canDate &&
+            [
+              'dashboard',
+              'users',
+              'dossier',
+              'roles',
+              'careers',
+              'interests',
+            ].contains(_page));
+    if (forbidden) {
+      _items = [];
+      _account = null;
+      _error = null;
+      _notice = null;
+      _page = widget.access.canDate ? 'dashboard' : 'requests';
+      _section = 'requests';
+      if (_page == 'requests') {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && widget.access.canAdminister && _page == 'requests') {
+            _load();
+          }
+        });
+      }
+    }
   }
 
   @override
@@ -160,21 +213,50 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
       _error = null;
       if (!more) _items = [];
     });
+    final requestedStatus = _status;
+    final canResolveIdentities = widget.access.canDate;
     try {
       final cursor = more && _items.isNotEmpty
           ? _items.last['id'] as String
           : null;
-      final raw = _section == 'audit'
-          ? await widget.client.audit(cursor: cursor)
-          : _section == 'reports'
-          ? await widget.client.reports()
-          : await widget.client.requests(status: _status, cursor: cursor);
-      if (mounted) {
+      final raw = await widget.client.requests(
+        status: requestedStatus,
+        cursor: cursor,
+      );
+      final rows = raw
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      final ids = rows
+          .expand((item) => [item['uid'], item['reviewedBy']])
+          .whereType<String>()
+          .where(
+            (id) =>
+                RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(id) &&
+                id != 'authorized_operator',
+          )
+          .toSet()
+          .toList();
+      final people = <String, Map<String, dynamic>>{};
+      if (canResolveIdentities && ids.isNotEmpty) {
+        try {
+          for (final person in await widget.client.identities(ids)) {
+            if (person['uid'] case final String uid) people[uid] = person;
+          }
+        } catch (_) {
+          // Una consulta de presentación fallida no impide revisar solicitudes.
+        }
+      }
+      for (final row in rows) {
+        row['student'] = people[row['uid']];
+        row['reviewer'] = people[row['reviewedBy']];
+      }
+      if (mounted &&
+          _section == 'requests' &&
+          _status == requestedStatus &&
+          widget.access.canAdminister &&
+          (!canResolveIdentities || widget.access.canDate)) {
         setState(() {
-          _items = [
-            ..._items,
-            ...raw.map((e) => Map<String, dynamic>.from(e as Map)),
-          ];
+          _items = [..._items, ...rows];
           _more = raw.length == 20 && _section != 'reports';
         });
       }
@@ -219,7 +301,7 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
       if (!await confirmAction(
         context,
         'Aprobar verificación',
-        'Confirma que el carnet vigente corresponde a este estudiante y a Univalle sede Cochabamba.',
+        'Confirma que el carnet vigente identifica a este estudiante y acredita su pertenencia a una universidad.',
       )) {
         return;
       }
@@ -227,7 +309,8 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
       reason = await _reason('Motivo de rechazo', {
         'unreadable': 'Fotografía ilegible',
         'expired': 'Carnet vencido',
-        'not_univalle_cochabamba': 'No corresponde a Univalle Cochabamba',
+        'not_university_student':
+            'El carnet no acredita que sea estudiante universitario',
         'information_mismatch': 'Datos no coincidentes',
         'other': 'Documento insuficiente',
       });
@@ -266,8 +349,16 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
       );
   Future<void> _lookup() => _run(() async {
     setState(() => _account = null);
-    final a = await widget.client.account(_uid.text.trim());
-    if (mounted) setState(() => _account = a);
+    final uid = _uid.text.trim();
+    final raw = await widget.client.account(uid);
+    final people = widget.access.canDate
+        ? await widget.client.identities([uid])
+        : <Map<String, dynamic>>[];
+    if (mounted) {
+      setState(
+        () => _account = {...raw, if (people.isNotEmpty) ...people.first},
+      );
+    }
   }, refresh: false);
   Future<void> _suspend(bool value) async {
     final reason = await _reason(
@@ -283,7 +374,7 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
     if (!await confirmAction(
       context,
       value ? 'Suspender cuenta' : 'Restablecer cuenta',
-      'Se aplicará inmediatamente a la cuenta ${_account!['uid']}. Su visibilidad voluntaria no cambiará.',
+      'Se aplicará inmediatamente a ${personName(_account)}. Su visibilidad voluntaria no cambiará.',
     )) {
       return;
     }
@@ -291,7 +382,7 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
     await _run(() async {
       await widget.client.suspend(_account!['uid'] as String, value, reason);
       final a = await widget.client.account(_account!['uid'] as String);
-      if (mounted) setState(() => _account = a);
+      if (mounted) setState(() => _account = {...?_account, ...a});
     }, refresh: false);
   }
 
@@ -299,7 +390,7 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
     if (!await confirmAction(
       context,
       'Cambiar rol administrativo',
-      'Asignar rol $role a ${_account!['uid']}. La acción quedará auditada y no modifica la verificación.',
+      '${role == 'admin' ? 'Asignar el rol Administrador' : 'Retirar el rol Administrador'} a ${personName(_account)}. La acción quedará auditada y no modifica la acreditación.',
     )) {
       return;
     }
@@ -307,60 +398,175 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
     await _run(() async {
       await widget.client.role(_account!['uid'] as String, role);
       final a = await widget.client.account(_account!['uid'] as String);
-      if (mounted) setState(() => _account = a);
+      if (mounted) setState(() => _account = {...?_account, ...a});
     }, refresh: false);
   }
 
+  void _navigate(String page) {
+    if (_busy) return;
+    setState(() {
+      _page = page;
+      if ([
+        'requests',
+        'reports',
+        'audit',
+        'accounts',
+        'roles',
+      ].contains(page)) {
+        _section = page == 'roles' ? 'accounts' : page;
+        _items = [];
+        _account = null;
+        _notice = null;
+        _error = null;
+      }
+    });
+    if (page == 'requests') _load();
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Theme(
+    data: AdminTheme.dark,
+    child: Builder(builder: _buildPanel),
+  );
+
+  Widget _buildPanel(BuildContext context) {
+    if (!widget.access.canAdminister) {
+      return const Scaffold(
+        body: Center(child: Text('Acceso administrativo no autorizado.')),
+      );
+    }
+    final content = switch (_page) {
+      'dashboard' => AdminOverview(
+        client: widget.client,
+        onNavigate: _navigate,
+        showAudit: _root,
+      ),
+      'users' => AdminPeopleView(
+        client: widget.client,
+        onInspect: (uid) => setState(() {
+          _dossierUid = uid;
+          _page = 'dossier';
+        }),
+      ),
+      'dossier' when widget.access.canDate && _dossierUid != null => PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (popped, _) {
+          if (!popped) _navigate('users');
+        },
+        child: AdminDossier(
+          key: ValueKey(_dossierUid),
+          client: widget.client,
+          uid: _dossierUid!,
+          onBack: () => _navigate('users'),
+          onManage: () {
+            _navigate('accounts');
+            _uid.text = _dossierUid!;
+            _lookup();
+          },
+        ),
+      ),
+      'roles' =>
+        _account == null
+            ? Column(
+                children: [
+                  if (_busy) const LinearProgressIndicator(),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: AppNotice(_error!, error: true),
+                    ),
+                  Expanded(
+                    child: AdminPeopleView(
+                      client: widget.client,
+                      selecting: true,
+                      onInspect: (uid) {
+                        if (_busy) return;
+                        _uid.text = uid;
+                        _lookup();
+                      },
+                    ),
+                  ),
+                ],
+              )
+            : _operations(context),
+      'audit' => AdminHistoryView(
+        key: ValueKey(
+          'audit:${widget.uid}:${widget.access.role}:${widget.access.status}:${widget.access.suspended}',
+        ),
+        client: widget.client,
+      ),
+      'reports' => AdminHistoryView(
+        key: ValueKey(
+          'reports:${widget.uid}:${widget.access.role}:${widget.access.status}:${widget.access.suspended}',
+        ),
+        client: widget.client,
+        reports: true,
+        onInspect: (uid) {
+          _navigate('accounts');
+          _uid.text = uid;
+          _lookup();
+        },
+        onReview: widget.client.reviewReport,
+      ),
+      'universities' => AcademicAdminScreen(client: widget.client),
+      'careers' || 'interests' => CatalogAdminScreen(
+        key: ValueKey(_page),
+        client: widget.client,
+        access: widget.access,
+        kind: _page,
+        embedded: true,
+      ),
+      'settings' => ListView(
+        padding: const EdgeInsets.all(28),
+        children: [
+          const SectionHeading(
+            'Tu espacio de administración',
+            icon: Icons.settings_outlined,
+          ),
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'La verificación, la suspensión y los roles se validan en el servidor. Los documentos privados se muestran temporalmente y no forman parte del perfil público.',
+              ),
+            ),
+          ),
+          Text(
+            _root
+                ? 'Rol actual · Superadministrador'
+                : 'Rol actual · Administrador',
+          ),
+          const SizedBox(height: 24),
+          widget.logout,
+        ],
+      ),
+      _ => _operations(context),
+    };
+    return AdminShell(
+      root: _root,
+      selected: _page == 'dossier' ? 'users' : _page,
+      catalogsAllowed: widget.access.canDate,
+      onSelected: _navigate,
+      logout: widget.logout,
+      onDating: widget.onDating,
+      child: content,
+    );
+  }
+
+  Widget _operations(BuildContext context) {
     if (!widget.access.canAdminister) {
       return const Scaffold(
         body: Center(child: Text('Acceso administrativo no autorizado.')),
       );
     }
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_root ? 'Superadministración' : 'Administración'),
-      ),
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final entry in {
-                    'requests': 'Solicitudes',
-                    'reports': 'Reportes',
-                    'accounts': 'Cuentas',
-                    if (_root) 'audit': 'Auditoría',
-                  }.entries)
-                    ChoiceChip(
-                      label: Text(entry.value),
-                      selected: _section == entry.key,
-                      onSelected: _busy
-                          ? null
-                          : (_) {
-                              setState(() {
-                                _section = entry.key;
-                                _notice = null;
-                                _error = null;
-                                _items = [];
-                                _account = null;
-                              });
-                              if (_section != 'accounts') _load();
-                            },
-                    ),
-                  TextButton(
-                    onPressed: widget.onDating,
-                    child: const Text('Abrir aplicación'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
               if (_section == 'requests') ...[
                 DropdownButtonFormField<String>(
                   initialValue: _status,
@@ -423,22 +629,31 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
                     child: const Text('Cargar más registros'),
                   ),
               ] else ...[
-                const Text(
-                  'Busca por identificador de cuenta (UID). No se publican correos ni documentos privados.',
-                ),
-                TextField(
-                  controller: _uid,
-                  enabled: !_busy,
-                  decoration: const InputDecoration(
-                    labelText: 'UID de la cuenta',
-                  ),
-                  onSubmitted: (_) {
-                    if (!_busy) _lookup();
-                  },
-                ),
-                FilledButton(
-                  onPressed: _busy ? null : _lookup,
-                  child: const Text('Consultar cuenta'),
+                OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final selected = await showDialog<String>(
+                            context: context,
+                            builder: (ctx) => Dialog(
+                              child: SizedBox(
+                                width: 1000,
+                                height: 650,
+                                child: AdminPeopleView(
+                                  client: widget.client,
+                                  selecting: true,
+                                  onInspect: (uid) => Navigator.pop(ctx, uid),
+                                ),
+                              ),
+                            ),
+                          );
+                          if (selected != null && mounted) {
+                            _uid.text = selected;
+                            _lookup();
+                          }
+                        },
+                  icon: const Icon(Icons.person_search_outlined),
+                  label: const Text('Seleccionar persona'),
                 ),
                 if (_account != null)
                   Card(
@@ -447,8 +662,15 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SelectableText('UID: ${_account!['uid']}'),
-                          Text('Rol: ${_account!['role']}'),
+                          Text(
+                            personName(_account),
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          if (_account!['email'] != null)
+                            Text(_account!['email'] as String),
+                          Text(
+                            'Rol: ${adminRoles[_account!['role']] ?? 'No disponible'}',
+                          ),
                           Text(
                             'Verificación: ${statusLabel(_account!['verificationStatus'] as String?)}',
                           ),
@@ -473,7 +695,9 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
                                       : 'Suspender cuenta',
                                 ),
                               ),
-                            if (_root && _account!['role'] != 'superadmin')
+                            if (_root &&
+                                widget.access.canDate &&
+                                _account!['role'] != 'superadmin')
                               OutlinedButton(
                                 onPressed: _busy
                                     ? null
@@ -507,21 +731,47 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
     );
   }
 
-  Widget _card(Map<String, dynamic> item) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_section == 'requests') ...[
-            SelectableText('Solicitud: ${item['id']}'),
-            SelectableText('Estudiante: ${item['uid']}'),
-            Text(
-              '${statusLabel(item['status'] as String?)} · Enviada: ${displayDate(item['createdAt'])}',
+  Widget _card(Map<String, dynamic> item) {
+    final student = item['student'] as Map<String, dynamic>? ?? const {};
+    final reviewer = item['reviewer'] as Map<String, dynamic>? ?? const {};
+    final reviewerName = item['reviewedBy'] == 'authorized_operator'
+        ? 'Operador autorizado'
+        : item['reviewedBy'] == null
+        ? 'Responsable no disponible'
+        : personName(reviewer);
+    final academic = [
+      item['universityName'],
+      item['campusName'],
+      student['career'],
+    ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' · ');
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                AdminIdentity(person: student),
+                StatusPill(
+                  statusLabel(item['status'] as String?),
+                  positive: item['status'] == 'approved',
+                ),
+              ],
             ),
+            if (academic.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(academic),
+              ),
+            const SizedBox(height: 12),
+            Text('Enviada · ${displayDate(item['createdAt'])}'),
             if (item['resolvedAt'] != null)
               Text(
-                'Resuelta: ${displayDate(item['resolvedAt'])} · ${item['reviewedBy'] ?? 'Sistema'}',
+                'Resuelta · ${displayDate(item['resolvedAt'])} · $reviewerName',
               ),
             if (item['reasonCode'] != null)
               Text(
@@ -560,69 +810,9 @@ class _AdministrationScreenState extends State<AdministrationScreen> {
                   ),
                 ],
               ),
-          ] else if (_section == 'reports') ...[
-            SelectableText('Reporte: ${item['id']}'),
-            SelectableText('Cuenta reportada: ${item['reportedId']}'),
-            Text(
-              'Motivo: ${item['reason'] ?? item['reasonCode'] ?? 'Sin detalle'}',
-            ),
-            Text('Fecha: ${displayDate(item['createdAt'])}'),
-            if (item['details'] is String &&
-                (item['details'] as String).isNotEmpty)
-              Text(item['details'] as String),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: _busy
-                      ? null
-                      : () {
-                          _uid.text = item['reportedId'] as String;
-                          setState(() {
-                            _section = 'accounts';
-                            _account = null;
-                          });
-                          _lookup();
-                        },
-                  child: const Text('Consultar / suspender cuenta'),
-                ),
-                for (final r in {
-                  'reviewed': 'Marcar revisado',
-                  'dismissed': 'Descartar reporte',
-                }.entries)
-                  TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () async {
-                            if (await confirmAction(
-                                  context,
-                                  r.value,
-                                  'La resolución del reporte quedará auditada.',
-                                ) &&
-                                mounted) {
-                              await _run(
-                                () => widget.client.reviewReport(
-                                  item['id'] as String,
-                                  r.key,
-                                ),
-                              );
-                            }
-                          },
-                    child: Text(r.value),
-                  ),
-              ],
-            ),
-          ] else ...[
-            Text('${item['action']} · ${displayDate(item['at'])}'),
-            SelectableText(
-              'Actor: ${item['actorId']}\nCuenta: ${item['targetId']}',
-            ),
-            Text('Motivo: ${item['reasonCode']}'),
-            if (item['requestId'] != null)
-              SelectableText('Solicitud: ${item['requestId']}'),
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

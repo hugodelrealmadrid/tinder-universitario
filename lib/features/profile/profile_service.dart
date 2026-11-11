@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../auth/auth_service.dart' show isAdult;
+import '../auth/academic_selector.dart';
 import 'photo_store.dart';
 import 'student_profile.dart';
 import '../discovery/discovery_publication.dart';
@@ -28,26 +29,65 @@ class ProfileService {
     return StudentProfile.fromMap(snapshot.data()!);
   }
 
-  Future<List<CatalogItem>> catalog(String collection) async {
+  Future<Set<String>> campusCareers(String university, String campus) async {
+    final options = await AcademicDirectory(
+      _db,
+    ).options('universities/$university/campuses/$campus/offerings');
+    return options.map((item) => item.id).toSet();
+  }
+
+  Future<void> completeAffiliation(String uid, AcademicChoice choice) async {
+    await _db.runTransaction((tx) async {
+      final ref = _user(uid);
+      final data = (await tx.get(ref)).data();
+      if (data == null ||
+          data['campusId'] != null ||
+          (data['universityId'] != null &&
+              data['universityId'] != choice.universityId) ||
+          (data['careerId'] != null && data['careerId'] != choice.careerId)) {
+        throw const ProfileException(
+          'La afiliación guardada cambió. Recarga el perfil.',
+        );
+      }
+      final changes = <String, dynamic>{
+        'universityId': choice.universityId,
+        'campusId': choice.campusId,
+        'careerId': choice.careerId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      tx.update(ref, changes);
+      DiscoveryPublication.write(tx, _db, uid, {...data, ...changes});
+    });
+  }
+
+  Future<List<CatalogItem>> catalog(
+    String collection, {
+    List<String> retainedIds = const [],
+  }) async {
+    if (!['careers', 'interests'].contains(collection)) {
+      throw const ProfileException('Catálogo no válido.');
+    }
     final snapshot = await _db
         .collection(collection)
         .where('isActive', isEqualTo: true)
         .get(const GetOptions(source: Source.server));
     final items = snapshot.docs
-        .map((doc) => CatalogItem(doc.id, doc.data()['name'] as String))
+        .map((d) => CatalogItem.fromMap(d.id, d.data()))
         .toList();
+    for (final id in retainedIds.toSet()) {
+      if (items.any((x) => x.id == id)) continue;
+      final d = await _db
+          .collection(collection)
+          .doc(id)
+          .get(const GetOptions(source: Source.server));
+      if (d.exists) {
+        final item = CatalogItem.fromMap(d.id, d.data()!);
+        items.add(item);
+      }
+    }
     items.sort((a, b) => a.name.compareTo(b.name));
     return items;
   }
-
-  Future<bool> _activeCareer(String? id) async =>
-      id != null &&
-      (await _db
-                  .collection('careers')
-                  .doc(id)
-                  .get(const GetOptions(source: Source.server)))
-              .data()?['isActive'] ==
-          true;
 
   Future<StudentProfile> save(
     String uid,
@@ -65,29 +105,31 @@ class ProfileService {
     if (draft.birthDate != null && !isAdult(draft.birthDate!)) {
       throw const ProfileException('Debes tener al menos 18 años.');
     }
-    if (draft.careerId != null && !await _activeCareer(draft.careerId)) {
-      throw const ProfileException('Selecciona una carrera activa.');
-    }
     if (draft.interestIds.length > maxInterests ||
         draft.interestIds.toSet().length != draft.interestIds.length) {
       throw const ProfileException('Selecciona hasta 5 intereses distintos.');
-    }
-    for (final id in draft.interestIds) {
-      if ((await _db
-                  .collection('interests')
-                  .doc(id)
-                  .get(const GetOptions(source: Source.server)))
-              .data()?['isActive'] !=
-          true) {
-        throw const ProfileException(
-          'Uno de los intereses ya no está activo. Recarga el catálogo.',
-        );
-      }
     }
     await _db.runTransaction((tx) async {
       final ref = _user(uid);
       final data = (await tx.get(ref)).data()!;
       final current = StudentProfile.fromMap(data);
+      if (draft.careerId != current.careerId && draft.careerId != null) {
+        final c = (await tx.get(_db.doc('careers/${draft.careerId!}'))).data();
+        if (c?['isActive'] != true) {
+          throw const ProfileException('Selecciona una carrera activa.');
+        }
+      }
+      for (final id in draft.interestIds.where(
+        (id) => !current.interestIds.contains(id),
+      )) {
+        if ((await tx.get(_db.doc('interests/$id'))).data()?['isActive'] !=
+            true) {
+          throw const ProfileException(
+            'Selecciona intereses activos del catálogo.',
+          );
+        }
+      }
+
       // Nunca reemplazar fotos con las de una copia antigua del formulario.
       final merged = draft.withPhotos(current.photoUrls, current.mainPhotoUrl);
       final changes = <String, dynamic>{
@@ -118,9 +160,7 @@ class ProfileService {
         'photoUrls': changed.urls,
         'mainPhotoUrl': changed.main,
         'isActive':
-            current.isActive &&
-            next.isComplete &&
-            career?.data()?['isActive'] == true,
+            current.isActive && next.isComplete && career?.exists == true,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       tx.update(ref, changes);

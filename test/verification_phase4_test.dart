@@ -25,15 +25,38 @@ const root = AccountAccess(
   suspended: false,
 );
 Future<void> tap(WidgetTester tester, String text) async {
+  if (text == 'Cuentas') {
+    await tester.tap(find.byTooltip('Menú de administración'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Usuarios'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ver detalle'));
+    await tester.pumpAndSettle();
+    await tap(tester, 'Gestionar cuenta');
+    return;
+  }
+  if (['Auditoría', 'Reportes', 'Verificaciones'].contains(text) &&
+      find.text(text).evaluate().isEmpty) {
+    await tester.tap(find.byTooltip('Menú de administración'));
+    await tester.pumpAndSettle();
+  }
   if (find.text(text).evaluate().isEmpty) {
     await tester.scrollUntilVisible(
       find.text(text),
       200,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: find.byType(Drawer).evaluate().isNotEmpty
+          ? find
+                .descendant(
+                  of: find.byType(Drawer),
+                  matching: find.byType(Scrollable),
+                )
+                .first
+          : find.byType(Scrollable).first,
     );
   }
   final f = find.text(text).last;
   await tester.ensureVisible(f);
+  await tester.pumpAndSettle();
   await tester.runAsync(() async {
     await tester.tap(f);
     await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -53,6 +76,7 @@ Widget panel(FakeVerificationClient api, {AccountAccess access = admin}) =>
     MaterialApp(
       home: AdministrationScreen(
         client: api,
+        initialPage: 'requests',
         access: access,
         uid: 'admin',
         logout: const Text('SALIR'),
@@ -65,6 +89,22 @@ void main() {
   setUpAll(() async {
     pngFixture = await chatPngFixture();
   });
+  testWidgets(
+    'Verificaciones identifica personas y omite identificadores técnicos',
+    (tester) async {
+      final api = FakeVerificationClient()
+        ..rows = [
+          {...request(), 'id': 'uuid-fixture-privado'},
+        ];
+      await tester.pumpWidget(panel(api));
+      await tester.pumpAndSettle();
+      expect(find.text('Persona Ficticia'), findsOneWidget);
+      expect(find.text('persona@ligo.test'), findsOneWidget);
+      expect(find.textContaining('uuid-fixture-privado'), findsNothing);
+      expect(find.text('Detalles técnicos'), findsNothing);
+    },
+  );
+
   test('Mensajes seguros de error y motivos comprensibles', () {
     expect(
       verificationError(const VerificationFailure('conflict')),
@@ -153,6 +193,12 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text(rejectionReasons['unreadable']!),
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       expect(find.text(rejectionReasons['unreadable']!), findsOneWidget);
       await tap(tester, 'Seleccionar nuevo carnet');
       await tap(tester, 'Descartar foto');
@@ -231,13 +277,12 @@ void main() {
     await tester.pumpWidget(panel(api));
     await tester.pumpAndSettle();
     await tap(tester, 'Cuentas');
-    await tester.enterText(find.byType(TextField), 'target');
-    await tap(tester, 'Consultar cuenta');
     expect(find.text('Asignar rol de administrador'), findsNothing);
     await tap(tester, 'Suspender cuenta');
     await tap(tester, 'Seguridad');
     await tap(tester, 'Confirmar');
     expect(api.calls, contains('suspend:target:true:safety'));
+    expect(find.text('Persona Ficticia'), findsOneWidget);
     expect(find.text('Restablecer cuenta'), findsOneWidget);
   });
   testWidgets('Superadmin gestiona rol ajeno y ve auditoría mínima', (
@@ -257,17 +302,16 @@ void main() {
     await tester.pumpWidget(panel(api, access: root));
     await tester.pumpAndSettle();
     await tap(tester, 'Cuentas');
-    await tester.enterText(find.byType(TextField), 'target');
-    await tap(tester, 'Consultar cuenta');
     await tap(tester, 'Asignar rol de administrador');
     await tap(tester, 'Confirmar');
     expect(api.calls, contains('role:target:admin'));
+    expect(find.text('Persona Ficticia'), findsOneWidget);
     await tap(tester, 'Revocar rol de administrador');
     await tap(tester, 'Confirmar');
     expect(api.calls, contains('role:target:user'));
     await tap(tester, 'Auditoría');
     expect(api.calls, contains('audit'));
-    expect(find.textContaining('role_admin'), findsOneWidget);
+    expect(find.text('Asignó el rol Administrador'), findsOneWidget);
   });
   testWidgets('Panel no ofrece cambios del propio rol', (tester) async {
     final api = FakeVerificationClient()
@@ -280,7 +324,6 @@ void main() {
     await tester.pumpWidget(panel(api, access: root));
     await tester.pumpAndSettle();
     await tap(tester, 'Cuentas');
-    await tap(tester, 'Consultar cuenta');
     expect(
       find.textContaining('No puedes modificar tu propia'),
       findsOneWidget,
@@ -379,6 +422,7 @@ void main() {
       ..rows = [
         {
           'id': 'report',
+          'status': 'pending',
           'reportedId': 'target',
           'reason': 'spam',
           'details': 'FICTICIO',

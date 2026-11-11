@@ -347,6 +347,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Bob, 22'), findsOneWidget);
       expect(find.text('Ingeniería de Sistemas Informáticos'), findsOneWidget);
+      await tester.tap(find.byTooltip('Información del perfil'));
+      await tester.pumpAndSettle();
       expect(find.text('Música'), findsOneWidget);
       expect(find.text('uidPrivado'), findsNothing);
       expect(find.text(birth.toIso8601String()), findsNothing);

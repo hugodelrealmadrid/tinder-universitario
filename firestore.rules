@@ -23,15 +23,87 @@ service cloud.firestore {
         && request.query.limit != null && request.query.limit <= 20;
       allow write: if false;
     }
+
+    // Configuración nueva y opcional, administrada solo por servidor. Su ausencia conserva el registro histórico.
+    match /notificationInboxes/{uid} {
+      allow get: if owner(uid) && get(/databases/$(database)/documents/accountAccess/$(uid)).data.suspended == false;
+      allow list, write: if false;
+      match /items/{item} {
+        allow get: if owner(uid) && get(/databases/$(database)/documents/accountAccess/$(uid)).data.suspended == false;
+        allow list: if owner(uid) && request.query.limit != null && request.query.limit <= 30
+          && get(/databases/$(database)/documents/accountAccess/$(uid)).data.suspended == false;
+        allow write: if false;
+      }
+    }
+    match /notificationSettings/{uid} {
+      allow get: if owner(uid);
+      allow list, write: if false;
+    }
+    match /notificationDevices/{key} { allow read, write: if false; }
+    match /notificationPushClaims/{key} { allow read, write: if false; }
+    match /platformSettings/academic { allow get: if request.auth != null; allow list, write: if false; }
+    match /registrationDirectory/version {
+      allow get: if requiresCampus() && (resource == null || resource.data.keys().hasOnly(['revision']));
+      allow list, write: if false;
+    }
+    match /universities/{id} {
+      allow read, write: if false;
+      match /campuses/{campus} {
+        allow read, write: if false;
+        match /offerings/{career} { allow read, write: if false; }
+      }
+    }
+    function publicUniversity(id) {
+      let item = get(/databases/$(database)/documents/universities/$(id)).data;
+      return item.get('directory', false) == true && item.isActive == true;
+    }
+    function offered(u, c, r) {
+      return validUid(u) && validUid(c) && validUid(r) && publicUniversity(u)
+        && get(/databases/$(database)/documents/universities/$(u)/campuses/$(c)).data.isActive == true
+        && get(/databases/$(database)/documents/universities/$(u)/campuses/$(c)/offerings/$(r)).data.isActive == true
+        && careerActive(r);
+    }
+    function requiresCampus() {
+      let policy = /databases/$(database)/documents/platformSettings/academic;
+      return exists(policy) && get(policy).data.get('campusRegistrationEnabled', false) == true;
+    }
+    function validNewAffiliation(data) {
+      return data.keys().hasAll(['universityId','campusId','careerId'])
+        && offered(data.universityId, data.campusId, data.careerId);
+    }
+    match /catalogUniqueKeys/{id} { allow read, write: if false; }
+    match /catalogOperations/{id} { allow read, write: if false; }
+    function hasUniversity(data) { return data.keys().hasAny(['universityId']); }
+    function careerExists(id) { return id is string && exists(/databases/$(database)/documents/careers/$(id)); }
+
+    function retainedInterest(id, old) { return id in old || interestActive(id); }
+    function retainedInterests(ids, old) {
+      return (ids.size() < 1 || retainedInterest(ids[0], old)) && (ids.size() < 2 || retainedInterest(ids[1], old))
+        && (ids.size() < 3 || retainedInterest(ids[2], old)) && (ids.size() < 4 || retainedInterest(ids[3], old))
+        && (ids.size() < 5 || retainedInterest(ids[4], old));
+    }
+    function allowedFilter(kind, id, old) { return id in old || get(/databases/$(database)/documents/$(kind)/$(id)).data.isActive == true; }
+    function retainedFilters(kind, ids, old) {
+      return (ids.size() < 1 || allowedFilter(kind, ids[0], old)) && (ids.size() < 2 || allowedFilter(kind, ids[1], old))
+        && (ids.size() < 3 || allowedFilter(kind, ids[2], old)) && (ids.size() < 4 || allowedFilter(kind, ids[3], old))
+        && (ids.size() < 5 || allowedFilter(kind, ids[4], old));
+    }
+
     function validGender(value) { return value in ['masculino', 'femenino']; }
     // Debe coincidir con DiscoveryLimits.maxAge y PreferredGender en Dart.
     function validPreferences(data) {
       return data.keys().hasAll(['minAge', 'maxAge', 'preferredGender', 'updatedAt'])
-        && data.keys().hasOnly(['minAge', 'maxAge', 'preferredGender', 'updatedAt', 'careerIds'])
+        && data.keys().hasOnly(['minAge', 'maxAge', 'preferredGender', 'updatedAt', 'careerIds', 'universityIds', 'universityMode', 'interestIds'])
         && data.minAge is int && data.maxAge is int
         && data.minAge >= 18 && data.minAge <= data.maxAge && data.maxAge <= 100
         && data.preferredGender in ['masculino', 'femenino', 'ambos']
-        && validCareerIds(data.get('careerIds', []));
+        && validCareerIds(data.get('careerIds', []))
+        && validCareerIds(data.get('interestIds', []))
+        && data.get('careerIds', []).size() + data.get('interestIds', []).size()
+          + (data.get('universityMode', 'all') == 'selected' ? data.get('universityIds', []).size() : 0) <= 9
+        && (data.get('universityMode', 'all') in ['all','mine','selected'])
+        && (data.get('universityMode', 'all') != 'selected'
+          || (validCareerIds(data.get('universityIds', [])) && data.universityIds.size() > 0));
     }
     function validCareerIds(ids) {
       return ids is list && ids.size() <= 5 && ids.toSet().size() == ids.size();
@@ -46,12 +118,22 @@ service cloud.firestore {
         ((request.time.month() < date.month() ||
           (request.time.month() == date.month() && request.time.day() < date.day())) ? 1 : 0);
     }
-    function accepts(preferences, profile) {
-      let profileAge = age(profile.birthDate);
-      return validPreferences(preferences) && validGender(profile.gender)
-        && (preferences.get('careerIds', []).size() == 0 || profile.careerId in preferences.careerIds)
-        && (preferences.preferredGender == 'ambos' || preferences.preferredGender == profile.gender)
-        && profileAge >= preferences.minAge && profileAge <= preferences.maxAge;
+    function accepts(preferences, profile, viewer) {
+      let years = age(profile.birthDate);
+      let careers = preferences.get('careerIds', []);
+      let interests = preferences.get('interestIds', []);
+      let mode = preferences.get('universityMode', 'all');
+      let university = profile.get('universityId', '');
+      return validGender(profile.gender)
+        && preferences.minAge is int && preferences.maxAge is int
+        && preferences.minAge >= 18 && preferences.maxAge <= 100
+        && years >= preferences.minAge && years <= preferences.maxAge
+        && preferences.preferredGender in ['ambos', profile.gender]
+        && (careers.size() == 0 || profile.careerId in careers)
+        && (interests.size() == 0 || profile.interestIds.hasAny(interests))
+        && (mode == 'all'
+          || (mode == 'mine' && university != '' && university == viewer.get('universityId', ''))
+          || (mode == 'selected' && university in preferences.universityIds));
     }
     function reciprocal(from, to) {
       let a = get(/databases/$(database)/documents/users/$(from)).data;
@@ -59,7 +141,7 @@ service cloud.firestore {
       let pa = get(/databases/$(database)/documents/preferences/$(from)).data;
       let pb = get(/databases/$(database)/documents/preferences/$(to)).data;
       return from != to && eligible(to) && a.isActive == true && b.isActive == true
-        && complete(a) && complete(b) && accepts(pa, b) && accepts(pb, a);
+        && complete(a) && complete(b) && accepts(pa, b, a) && accepts(pb, a, b);
     }
     function validUid(uid) { return uid is string && uid.matches('[A-Za-z0-9_-]{1,128}'); }
     function swipeIdFor(from, to) { return from + '.' + to; }
@@ -98,13 +180,7 @@ service cloud.firestore {
       return viewer != uid && matched(viewer, uid) && eligible(uid) && user.isActive == true
         && complete(user) && resource.data == cardFields(user);
     }
-    function cardFields(user) {
-      // Solo edad cumplida. Comparar también en lectura cierra el acceso a
-      // fichas antiguas con birthDate o a edades vencidas tras un cumpleaños.
-      return {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender,
-        'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl,
-        'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt};
-    }
+    function cardFields(user) { return user.keys().hasAny(['campusId']) ? {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt, 'universityId': user.universityId, 'campusId': user.campusId} : hasUniversity(user) ? {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt, 'universityId': user.universityId} : {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt}; }
     function adult(date) {
       return date is timestamp &&
         (request.time.year() - date.year() > 18 ||
@@ -141,12 +217,12 @@ service cloud.firestore {
     function complete(data) {
       return data.firstName.matches('.*\\S.*') && data.lastName.matches('.*\\S.*')
         && adult(data.birthDate) && validGender(data.gender)
-        && careerActive(data.careerId) && data.photoUrls.size() > 0
+        && careerExists(data.careerId) && data.photoUrls.size() > 0
         && data.mainPhotoUrl is string && data.mainPhotoUrl in data.photoUrls;
     }
     function schema(data, uid) {
       return data.keys().hasAll(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt', 'datingAllowed'])
+        && data.keys().hasOnly(['firstName', 'lastName', 'email', 'birthDate', 'gender', 'description', 'careerId', 'photoUrls', 'mainPhotoUrl', 'interestIds', 'role', 'isActive', 'createdAt', 'updatedAt', 'datingAllowed', 'universityId', 'campusId'])
         && data.get('datingAllowed', false) is bool
         && data.firstName is string && data.firstName.size() <= 80
         && data.lastName is string && data.lastName.size() <= 80
@@ -170,9 +246,13 @@ service cloud.firestore {
         && request.resource.data.role == 'user'
         && request.resource.data.isActive == false
         && adult(request.resource.data.birthDate)
-        && request.resource.data.firstName == '' && request.resource.data.lastName == ''
         && request.resource.data.gender == '' && request.resource.data.description == ''
-        && request.resource.data.careerId == null && request.resource.data.interestIds == []
+        && ((validNewAffiliation(request.resource.data)
+              && retainedInterests(request.resource.data.interestIds, []))
+          || (!requiresCampus() && !hasUniversity(request.resource.data)
+            && !request.resource.data.keys().hasAny(['campusId']) && request.resource.data.careerId == null
+            && request.resource.data.firstName == '' && request.resource.data.lastName == ''
+            && request.resource.data.interestIds == []))
         && request.resource.data.photoUrls == [] && request.resource.data.mainPhotoUrl == null
         && request.resource.data.createdAt == request.time;
       allow update: if owner(uid) && selfEditable(uid) && schema(request.resource.data, uid)
@@ -185,8 +265,21 @@ service cloud.firestore {
           'firstName', 'lastName', 'birthDate', 'gender', 'description', 'careerId',
           'photoUrls', 'mainPhotoUrl', 'interestIds', 'isActive', 'updatedAt'])
         && (request.resource.data.careerId == resource.data.careerId
-          || request.resource.data.careerId == null || careerActive(request.resource.data.careerId))
-        && (request.resource.data.interestIds == resource.data.interestIds || validInterests(request.resource.data.interestIds));
+          || (resource.data.keys().hasAny(['campusId'])
+            ? offered(resource.data.universityId, resource.data.campusId, request.resource.data.careerId)
+            : request.resource.data.careerId == null || careerActive(request.resource.data.careerId)))
+        && (request.resource.data.interestIds == resource.data.interestIds || retainedInterests(request.resource.data.interestIds, resource.data.interestIds));
+      // Completar una afiliación histórica solo una vez, sin reasignar valores guardados.
+      allow update: if owner(uid) && selfEditable(uid)
+        && resource.data.get('campusId', null) == null
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['universityId','campusId','careerId','updatedAt'])
+        && (resource.data.get('universityId', null) == null
+          || request.resource.data.universityId == resource.data.universityId)
+        && (resource.data.get('careerId', null) == null
+          || request.resource.data.careerId == resource.data.careerId)
+        && validNewAffiliation(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
       allow list, delete: if false;
     }
     match /careers/{id} {
@@ -200,7 +293,16 @@ service cloud.firestore {
     match /preferences/{uid} {
       allow get: if owner(uid);
       allow create, update: if owner(uid) && validPreferences(request.resource.data)
-        && activeCareerIds(request.resource.data.get('careerIds', []))
+        && retainedFilters('careers', request.resource.data.get('careerIds', []), resource == null ? [] : resource.data.get('careerIds', []))
+        && retainedFilters('interests', request.resource.data.get('interestIds', []), resource == null ? [] : resource.data.get('interestIds', []))
+        && (request.resource.data.get('universityMode', 'all') != 'mine'
+          || getAfter(/databases/$(database)/documents/users/$(uid)).data.get('universityId', null) != null)
+        && (request.resource.data.get('universityMode', 'all') == 'selected'
+          ? retainedFilters('universities', request.resource.data.universityIds,
+              resource == null ? [] : resource.data.get('universityIds', []))
+          : (resource == null ? !request.resource.data.keys().hasAny(['universityIds'])
+              : !request.resource.data.diff(resource.data).affectedKeys().hasAny(['universityIds'])
+                || request.resource.data.get('universityIds', []).size() == 0))
         && request.resource.data.updatedAt == request.time;
       allow list, delete: if false;
     }
@@ -229,10 +331,7 @@ service cloud.firestore {
     }
     // Galería pública solo para una pareja activa, nunca correo o datos privados.
     match /matchProfiles/{uid} {
-      function fields(user) { return {'firstName':user.firstName,'age':user.birthDate is timestamp ? age(user.birthDate) : null,'gender':user.gender,
-           'description':user.description,'careerId':user.careerId,'mainPhotoUrl':user.mainPhotoUrl,
-           'interestIds':user.interestIds,'isActive':user.isActive,'updatedAt':user.updatedAt,
-           'photoUrls':user.photoUrls}; }
+      function fields(user) { return user.keys().hasAny(['campusId']) ? {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt, 'photoUrls': user.photoUrls, 'universityId': user.universityId, 'campusId': user.campusId} : hasUniversity(user) ? {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt, 'photoUrls': user.photoUrls, 'universityId': user.universityId} : {'firstName': user.firstName, 'age': user.birthDate is timestamp ? age(user.birthDate) : null, 'gender': user.gender, 'description': user.description, 'careerId': user.careerId, 'mainPhotoUrl': user.mainPhotoUrl, 'interestIds': user.interestIds, 'isActive': user.isActive, 'updatedAt': user.updatedAt, 'photoUrls': user.photoUrls}; }
       allow get: if dating() && eligible(uid) && validUid(uid) && validUid(request.auth.uid)
         && (owner(uid) || (matched(request.auth.uid, uid) && noBlocks(request.auth.uid, uid)
           && get(/databases/$(database)/documents/users/$(uid)).data.isActive == true

@@ -74,7 +74,9 @@ void main() {
     final c = VoiceNoteController(f);
     await c.begin();
     // Stopwatch uses monotonic wall time; widget pumps only advance timers.
-    await tester.runAsync(() => Future<void>.delayed(const Duration(seconds: 4)));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 4)),
+    );
     await tester.pump(const Duration(seconds: 4));
     expect(c.recording, false);
     expect(c.draft, isNull);
@@ -98,7 +100,7 @@ void main() {
     expect(signal.rms, closeTo(0.022097, 0.00001));
     expect(signal.meter, greaterThan(0));
   });
-  test('Adaptador conserva PCM16 mono y entrada elegida', () async {
+  test('Adaptador conserva PCM16 mono y micrófono predeterminado', () async {
     const channel = MethodChannel('com.llfbandit.record/messages');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) async => null);
@@ -107,10 +109,9 @@ void main() {
           .setMockMethodCallHandler(channel, null),
     );
     final recorder = PausedWebRecorder();
-    final capture = RecordVoiceCapture(recorder: recorder)
-      ..device = const InputDevice(id: 'selected', label: 'Test');
+    final capture = RecordVoiceCapture(recorder: recorder);
     await capture.start();
-    expect(recorder.config!.device!.id, 'selected');
+    expect(recorder.config!.device, isNull);
     expect(recorder.config!.encoder, AudioEncoder.pcm16bits);
     expect(recorder.config!.sampleRate, 16000);
     expect(recorder.config!.numChannels, 1);
@@ -200,6 +201,65 @@ void main() {
     expect(find.text('Enviar nota de voz'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('Soltar publica WAV válido y bloquear permite descartar', (
+    tester,
+  ) async {
+    for (final lock in [false, true]) {
+      final capture = FakeCapture();
+      final published = <Uint8List>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: VoiceNoteRecorder(
+              key: ValueKey(lock),
+              enabled: true,
+              capture: capture,
+              onBusy: (_) {},
+              onSend: (bytes) async => published.add(bytes),
+            ),
+          ),
+        ),
+      );
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byIcon(Icons.mic)),
+      );
+      await tester.pump(const Duration(milliseconds: 650));
+      await tester.pump();
+      expect(capture.starts, 1);
+      capture.stream.add(audiblePcm(32000));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      if (lock) await gesture.moveBy(const Offset(0, -100));
+      await gesture.up();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
+      if (lock) {
+        expect(published, isEmpty);
+        await tester.tap(find.byTooltip('Cancelar grabación'));
+        await tester.pumpAndSettle();
+        expect(capture.cancels, greaterThan(0));
+      } else {
+        for (var i = 0; i < 5 && published.isEmpty; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(
+          published,
+          hasLength(1),
+          reason:
+              'stop=${capture.stops} cancel=${capture.cancels} UI=${tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).toList()}',
+        );
+        await ChatMediaValidation.validate(
+          published.single,
+          'audio',
+          'audio/wav',
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
   test('Sin permiso no abre micrófono ni genera borrador', () async {
     final f = FakeCapture()..allowed = false;
     final c = VoiceNoteController(f);
@@ -288,8 +348,17 @@ void main() {
       await c.begin();
       f.stream.add(audiblePcm(3200));
       await c.finish();
-      await c.send((b) async => throw StateError('offline'));
-      expect(c.draft, isNull);
+      var attempts = 0;
+      await c.send((b) async {
+        attempts++;
+        throw StateError('offline');
+      });
+      expect(c.draft, isNotNull);
+      expect(c.deliveryUncertain, true);
+      await c.send((b) async {
+        attempts++;
+      });
+      expect(attempts, 1);
       expect(c.error, contains('confirmar'));
       expect(c.sending, false);
       c.dispose();

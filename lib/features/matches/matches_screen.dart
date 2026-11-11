@@ -1,3 +1,6 @@
+import '../notifications/notifications.dart';
+import '../../widgets/motion_entrance.dart';
+import '../../widgets/brand_header.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
@@ -95,8 +98,9 @@ class _MatchesScreenState extends State<MatchesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Mis Matches'),
+      title: const BrandHeader('Mis Matches'),
       actions: [
+        const NotificationBell(),
         IconButton(
           onPressed: _loading ? null : _load,
           icon: const Icon(Icons.refresh),
@@ -136,15 +140,107 @@ class _MatchesScreenState extends State<MatchesScreen> {
                   child: ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(16),
-                    itemCount: _visible.length,
+                    itemCount: _visible.length + 1,
                     itemBuilder: (context, index) {
-                      final entry = _visible[index];
+                      if (index == 0) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Una conexión, muchas posibilidades.',
+                              style: TextStyle(
+                                fontSize: 27,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -.7,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'TUS CONEXIONES',
+                              style: TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.6,
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            SizedBox(
+                              height: 116,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _visible.length,
+                                separatorBuilder: (_, i) =>
+                                    const SizedBox(width: 18),
+                                itemBuilder: (context, i) {
+                                  final e = _visible[i];
+                                  return InkWell(
+                                    onTap: e.profile == null
+                                        ? null
+                                        : () => Navigator.of(context).push(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) =>
+                                                  MatchProfileScreen(
+                                                    viewer: widget.uid,
+                                                    target: e.profile!.id,
+                                                  ),
+                                            ),
+                                          ),
+                                    child: SizedBox(
+                                      width: 76,
+                                      child: Column(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(3),
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: AppColors.coral,
+                                                width: 2,
+                                              ),
+                                            ),
+                                            child: SizedBox(
+                                              width: 64,
+                                              height: 64,
+                                              child: ClipOval(
+                                                child: AppPhoto(
+                                                  url: e.profile?.mainPhotoUrl,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Text(
+                                            e.profile?.firstName ?? 'Perfil',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SectionHeading(
+                              'Conversaciones',
+                              icon: Icons.chat_bubble_outline,
+                            ),
+                          ],
+                        );
+                      }
+                      final entry = _visible[index - 1];
                       return MatchTile(
                         entry: entry,
                         onTap: () async {
                           await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (context) => ChatScreen(
+                            conversationRoute(
+                              context,
+                              (_) => ChatScreen(
                                 matchId: StudentMatch.idFor(
                                   widget.uid,
                                   entry.match.otherUser(widget.uid),
@@ -174,72 +270,76 @@ class MatchTile extends StatelessWidget {
   final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) {
-    final profile = entry.profile;
+    final p = entry.profile;
     return Card(
+      margin: const EdgeInsets.symmetric(vertical: 5),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppTheme.radius),
+        borderRadius: BorderRadius.circular(22),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 18),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 84,
-                height: 104,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: AppPhoto(url: profile?.mainPhotoUrl),
-                ),
+                width: 62,
+                height: 62,
+                child: ClipOval(child: AppPhoto(url: p?.mainPhotoUrl)),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 15),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      profile == null
+                      p == null
                           ? 'Perfil no disponible'
-                          : '${profile.firstName}, ${profile.age}',
-                      style: Theme.of(context).textTheme.titleLarge,
+                          : '${p.firstName}, ${p.age}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Text(
-                      profile == null
-                          ? 'Este match se conserva.'
-                          : entry.careerName ?? 'Carrera no disponible',
+                      entry.careerName ?? 'Este match se conserva.',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    if (profile != null)
-                      TextButton.icon(
-                        icon: const Icon(Icons.person_outline),
-                        label: const Text('Ver perfil'),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => MatchProfileScreen(
-                              viewer: entry.match.otherUser(profile.id),
-                              target: profile.id,
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        if (p != null)
+                          TextButton(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => MatchProfileScreen(
+                                  viewer: entry.match.otherUser(p.id),
+                                  target: p.id,
+                                ),
+                              ),
                             ),
+                            child: const Text('Ver perfil'),
                           ),
+                        TextButton.icon(
+                          onPressed: onTap,
+                          icon: const Icon(
+                            Icons.chat_bubble_outline_rounded,
+                            size: 15,
+                          ),
+                          label: const Text('Abrir chat'),
                         ),
-                      ),
-                    TextButton.icon(
-                      onPressed: onTap,
-                      icon: const Icon(
-                        Icons.chat_bubble_outline_rounded,
-                        size: 16,
-                        color: AppColors.coral,
-                      ),
-                      label: const Text(
-                        'Abrir chat',
-                        style: TextStyle(
-                          color: AppColors.coral,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ],
           ),

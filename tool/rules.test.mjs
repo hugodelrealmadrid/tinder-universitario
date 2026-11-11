@@ -49,7 +49,7 @@ const update = data => updateDoc(profileRef(), {...data, updatedAt:serverTimesta
 const complete = () => ({firstName:'Ana',lastName:'Pérez',gender:'femenino',careerId:'sistemas',photoUrls:[baseUrl('ana')],mainPhotoUrl:baseUrl('ana'),isActive:true});
 
 before(async () => {
-  backend=new VerificationBackend(await emulatorServices(rulesProject,{auth:9199,firestore:firestorePort,storage:storagePort,hub:4410}));
+  backend=new VerificationBackend(await emulatorServices(rulesProject,{auth:Number(process.env.RULES_AUTH_PORT??9199),firestore:firestorePort,storage:storagePort,hub:Number(process.env.RULES_HUB_PORT??4410)}));
   env = await initializeTestEnvironment({projectId:rulesProject,
     firestore:{host:'127.0.0.1',port:firestorePort,rules:(await readFile(new URL('../firestore.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},
     storage:{host:'127.0.0.1',port:storagePort,rules:(await readFile(new URL('../storage.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},

@@ -1,3 +1,4 @@
+import {ligoTestTarget} from './ligo/test-target.mjs';
 import {test,before,beforeEach,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -14,14 +15,14 @@ import {cleanupMedia} from './backend/media-cleanup.mjs';
 import {validateMedia} from './backend/media-validation.mjs';
 import {sealPrivateObject} from './backend/private-object.mjs';
 import {imageFixture,audioFixture} from './test-media.mjs';
-const project='demo-tinder-phase3-tests';let env,s,b,png,tokens={};
+const stage=process.env.LIGO_STAGING_TESTS==='1';const ports=stage?ligoTestTarget().ports:{auth:9199,firestore:8188,storage:9298,hub:4410};const project=stage?ligoTestTarget().project:'demo-tinder-phase3-tests';let env,s,b,png,tokens={};
 const ctx=uid=>env.authenticatedContext(uid,{email:uid+'@demo.test',email_verified:true});
 const message=(id='m')=>({senderId:'ana',text:'',type:'image',mediaPath:'chat_media/ana.bob/ana/'+id,createdAt:serverTimestamp()});
 before(async()=>{
- s=await emulatorServices(project,{auth:9199,firestore:8188,storage:9298,hub:4410});b=new VerificationBackend(s);png=await imageFixture();
- env=await initializeTestEnvironment({projectId:project,firestore:{host:'127.0.0.1',port:8188,rules:await readFile(new URL('../firestore.rules',import.meta.url),'utf8')},storage:{host:'127.0.0.1',port:9298,rules:await readFile(new URL('../storage.rules',import.meta.url),'utf8')}});
- for(const uid of ['ana','bob','third','pending','admin','root']){try{await s.auth.getUser(uid);await s.auth.updateUser(uid,{password:'DemoTinder2026!'});}catch{await s.auth.createUser({uid,email:uid+'@demo.test',emailVerified:true,password:'DemoTinder2026!'});}
- const response=await fetch('http://127.0.0.1:9199/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:uid+'@demo.test',password:'DemoTinder2026!',returnSecureToken:true})});tokens[uid]=(await response.json()).idToken;assert.ok(tokens[uid]);}
+ s=await emulatorServices(project,ports);b=new VerificationBackend(s);png=await imageFixture();
+ env=await initializeTestEnvironment({projectId:project,firestore:{host:'127.0.0.1',port:ports.firestore,rules:await readFile(new URL('../firestore.rules',import.meta.url),'utf8')},storage:{host:'127.0.0.1',port:ports.storage,rules:await readFile(new URL('../storage.rules',import.meta.url),'utf8')}});
+ for(const uid of ['ana','bob','third','pending','admin','root']){try{await s.auth.getUser(uid);await s.auth.updateUser(uid,{email:uid+'@demo.test',disabled:false,emailVerified:true,password:'DemoTinder2026!'});}catch{await s.auth.createUser({uid,email:uid+'@demo.test',emailVerified:true,password:'DemoTinder2026!'});}
+ const response=await fetch('http://127.0.0.1:'+ports.auth+'/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:uid+'@demo.test',password:'DemoTinder2026!',returnSecureToken:true})});tokens[uid]=(await response.json()).idToken;assert.ok(tokens[uid]);}
 });
 after(async()=>env?.cleanup());
 beforeEach(async()=>{
@@ -65,7 +66,7 @@ test('Fotos: SDK no permite tokens, subida directa, modificación ni borrado',as
 });
 test('Fotos: token heredado funciona antes y deja de funcionar al revocarse sin alterar bytes',async()=>{
  const p=await picture(),file=s.bucket.file(p);await file.setMetadata({metadata:{firebaseStorageDownloadTokens:'old-phase5-token'}});
- const url=`http://127.0.0.1:9298/v0/b/${project}.appspot.com/o/${encodeURIComponent(p)}?alt=media&token=old-phase5-token`;
+ const url=`http://127.0.0.1:${ports.storage}/v0/b/${project}.appspot.com/o/${encodeURIComponent(p)}?alt=media&token=old-phase5-token`;
  const before=await fetch(url);assert.equal(before.status,200);await before.body.cancel();await sealPrivateObject(file);const after=await fetch(url);assert.equal(after.status,403);assert.deepEqual((await file.download())[0],png);
 });
 test('Fotos: rutas ambiguas, URL externa, foto ajena e inexistente no se aceptan',async()=>{
@@ -86,6 +87,19 @@ test('Chat: prueba de archivo obligatorio; remitente, ruta y tipo vinculados e i
 });
 test('Chat: participantes reciben bytes idénticos, tercero/pendiente y pareja ajena denegados',async()=>{
  const p=await publish();assert.deepEqual((await readChat(b,'bob',p,true)).bytes,png);for(const uid of ['third','pending'])await assert.rejects(readChat(b,uid,p,true));await assert.rejects(readChat(b,'bob',p.replace('ana.bob','ana.third'),true));await assert.rejects(deleteChat(b,'ana',p));
+});
+test('Chat: nota WAV publicada conserva MIME, duración y bytes privados', async () => {
+ const note = await audioFixture('audio/wav');
+ const payload = {...message('voice'), type: 'audio', durationMs: 1000};
+ await uploadChat(b, 'ana', payload.mediaPath, note, 'audio/wav');
+ await assertSucceeds(setDoc(doc(ctx('ana').firestore(), 'matches/ana.bob/messages/voice'), payload));
+ const metadata = await readChat(b, 'bob', payload.mediaPath);
+ assert.equal(metadata.durationMs, 1000);
+ assert.equal(metadata.contentType, 'audio/wav');
+ const received = await readChat(b, 'bob', payload.mediaPath, true);
+ assert.equal(received.contentType, 'audio/wav');
+ assert.deepEqual(received.bytes, note);
+ await assert.rejects(readChat(b, 'third', payload.mediaPath, true));
 });
 test('Chat: suspensión de cualquiera de los participantes revoca acceso y publicación pendiente',async()=>{
  const p=await publish();await uploadChat(b,'ana',message('later').mediaPath,png,'image/png');await b.suspend('admin','bob',true,'safety');

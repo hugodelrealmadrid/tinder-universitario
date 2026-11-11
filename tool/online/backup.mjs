@@ -3,6 +3,7 @@ import {saveEncrypted,privateDirectory,canonical,sha} from './private-backup.mjs
 import {writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
+import {isAbsolute,join} from 'node:path';
 const root=`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 export async function captureFirestore(read){
  const probe=await read(root+':runQuery',{structuredQuery:{from:[{collectionId:'users'}],limit:1}}),readTime=probe.at(-1)?.readTime;
@@ -29,14 +30,19 @@ async function captureAuth(read){
  if(users.some(u=>!u.passwordHash||u.mfaInfo?.length))throw Error('auth-backup-requires-review');
  users.sort((a,b)=>a.localId.localeCompare(b.localId));return {config,users};
 }
-async function listObjects(read){
- const buckets=await read(`https://storage.googleapis.com/storage/v1/b?project=${PROJECT}`),objects=[];
+export async function listObjects(read){
+ // Solo datos de la aplicación: excluye fuentes temporales de Cloud Build.
+ const bucket=await read('https://storage.googleapis.com/storage/v1/b/tinder-universitario.firebasestorage.app');
+ if(bucket.name!=='tinder-universitario.firebasestorage.app')throw Error('unexpected-application-bucket');
+ const buckets={items:[bucket]},objects=[];
  for(const bucket of buckets.items??[]){let page;do{const q=new URLSearchParams({versions:'true',maxResults:'1000'});if(page)q.set('pageToken',page);const d=await read(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket.name)}/o?`+q);objects.push(...(d.items??[]));page=d.nextPageToken;}while(page);}
  objects.sort((a,b)=>(a.bucket+'/'+a.name+'/'+a.generation).localeCompare(b.bucket+'/'+b.name+'/'+b.generation));return {buckets:buckets.items??[],objects};
 }
 export function crc32c(bytes){let crc=0xffffffff;for(const b of bytes){crc^=b;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0x82f63b78:0);}const out=Buffer.alloc(4);out.writeUInt32BE((crc^0xffffffff)>>>0);return out.toString('base64');}
 export async function backup(){
  if(process.argv[2]!=='--read-only-backup')throw Error('explicit-backup-flag-required');
+ const outputRoot=process.env.TINDER_BACKUP_OUTPUT_DIR;
+ if(outputRoot&&!isAbsolute(outputRoot))throw Error('backup-output-must-be-absolute');
  const read=await readClient(),startedAt=new Date().toISOString();
  const auth=await captureAuth(read);const firestore=await captureFirestore(read);const storage=await listObjects(read);
  const files=[];for(const meta of storage.objects){if(Number(meta.size)>32*1024*1024)throw Error('large-object-review-required');
@@ -49,11 +55,13 @@ export async function backup(){
  const indexes=await read(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/collectionGroups/-/indexes`);if(indexes.nextPageToken)throw Error('indexes-pagination-review-required');
  const authAgain=await captureAuth(read),storageAgain=await listObjects(read),firestoreAgain=await captureFirestore(read);
  if(canonical(auth)!==canonical(authAgain)||canonical(storage)!==canonical(storageAgain)||canonical(firestore.documents)!==canonical(firestoreAgain.documents)||canonical(firestore.missing)!==canonical(firestoreAgain.missing))throw Error('concurrent-change-backup-not-complete');
- const dir=fileURLToPath(new URL('../../build/online-backups/'+startedAt.replace(/[:.]/g,'-')+'/',import.meta.url));privateDirectory(dir);
+ const stamp=startedAt.replace(/[:.]/g,'-');
+ const dir=outputRoot?join(outputRoot,stamp):fileURLToPath(new URL('../../build/online-backups/'+stamp+'/',import.meta.url));
+ privateDirectory(dir);
  const data={format:'tinder-private-backup-v1',project:PROJECT,startedAt,completedAt:new Date().toISOString(),auth,firestore,storage:{...storage,files},rules,indexes};
- const verification=saveEncrypted(dir+'backup.dpapi',data);
+ const verification=saveEncrypted(join(dir,'backup.dpapi'),data);
  const counts={auth:auth.users.length,firestore:firestore.documents.length,objects:files.length,bytes:files.reduce((n,f)=>n+Number(f.metadata.size),0)};
  const manifest={format:data.format,project:PROJECT,...verification,counts,verified:true,firestoreReadTime:firestore.readTime,encryption:'Windows DPAPI CurrentUser; restaurar con el mismo perfil de Windows',consistency:'Firestore a readTime fijo; Auth/Storage/Firestore iguales en dos lecturas. No es transacción distribuida.'};
- writeFileSync(dir+'verified.json',JSON.stringify(manifest,null,2),{flag:'wx'});console.log(JSON.stringify({respaldo:dir,...counts,verificado:true,sha256:verification.cipherSha256}));
+ writeFileSync(join(dir,'verified.json'),JSON.stringify(manifest,null,2),{flag:'wx'});console.log(JSON.stringify({respaldo:dir,...counts,verificado:true,sha256:verification.cipherSha256}));
 }
 if(process.argv[1]&&import.meta.url===new URL('file:///'+process.argv[1].replaceAll('\\','/')).href)backup().catch(e=>{console.error(JSON.stringify({respaldoCompleto:false,codigo:/^[a-z0-9-]+$/.test(e.message)?e.message:'backup-failed-no-sensitive-details'}));process.exitCode=1;});

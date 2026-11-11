@@ -3,22 +3,32 @@ import {FieldValue,Timestamp,FieldPath} from 'firebase-admin/firestore';
 import sharp from 'sharp';
 import {sealPrivateObject} from './private-object.mjs';
 const roles=['user','admin','superadmin'],statuses=['pending','approved','rejected'];
-export class AccessError extends Error {constructor(code){super(code);this.code=code;}}
+import {AccessError} from './access-error.mjs';
+export {AccessError} from './access-error.mjs';
 function requireThat(ok,code='permission-denied'){if(!ok)throw new AccessError(code);}
 function id(uid){requireThat(typeof uid==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(uid),'invalid-argument');return uid;}
 const stamp=()=>FieldValue.serverTimestamp();
 export class VerificationBackend {
- constructor({db,bucket,auth,firestoreOrigin}){this.db=db;this.bucket=bucket;this.auth=auth;this.firestoreOrigin=firestoreOrigin;}
+ constructor({db,bucket,auth,firestoreOrigin,notifications}){this.db=db;this.bucket=bucket;this.auth=auth;this.firestoreOrigin=firestoreOrigin;this.notifications=notifications;}
  account(uid){return this.db.doc('accountAccess/'+id(uid));}
  request(requestId){return this.db.doc('verificationRequests/'+id(requestId));}
  async actor(tx,uid,administrative=false){
   const a=(await tx.get(this.account(uid))).data();
   requireThat(a&&roles.includes(a.role)&&statuses.includes(a.verificationStatus)&&a.suspended===false);
-  if(administrative)requireThat(a.verificationStatus==='approved'&&a.role!=='user');
+  if(administrative){
+   requireThat(a.role!=='user');
+   if(a.verificationStatus!=='approved'){
+    requireThat(a.role==='superadmin'&&a.verificationStatus==='pending'&&a.provisionalAdminUntil?.toMillis()>Date.now());
+    const grant=(await tx.get(this.db.doc('administration/provisionalBootstrap'))).data();
+    requireThat(grant?.uid===uid&&grant.state==='active'&&grant.scope==='online_test'&&grant.independentReview===false&&grant.expiresAt?.toMillis()===a.provisionalAdminUntil.toMillis()&&grant.expiresAt.toMillis()>Date.now()&&grant.requestId===a.latestRequestId);
+    const r=(await tx.get(this.request(grant.requestId))).data(),registry=(await tx.get(this.db.doc('administration/roles'))).data();
+    requireThat(r?.uid===uid&&r.status==='pending'&&r.documentStage==='ready'&&r.expiresAt?.toMillis()>Date.now()&&registry?.superadminIds?.includes(uid));
+   }
+  }
   return a;
  }
- audit(tx,actorId,targetId,action,reasonCode,requestId=null){
-  tx.create(this.db.collection('administrativeAudit').doc(),{actorId,targetId,action,reasonCode,requestId,at:stamp()});
+ audit(tx,actorId,targetId,action,reasonCode,requestId=null,result=null){
+  tx.create(this.db.collection('administrativeAudit').doc(),{actorId,targetId,action,reasonCode,requestId,at:stamp(),...(result?{result}:{})});
  }
  cleanup(tx,requestId,path,generation=null){
   tx.set(this.db.doc('verificationCleanup/'+id(requestId)),{requestId,path,generation,state:'pending',attempts:0,nextAttemptAt:Timestamp.now(),leaseUntil:null,updatedAt:stamp()});
@@ -40,8 +50,19 @@ export class VerificationBackend {
    const a=await this.actor(tx,uid);requireThat(a.verificationStatus!=='approved','already-approved');
    const old=a.latestRequestId?(await tx.get(this.request(a.latestRequestId))).data():null;
    if(old?.status==='pending')return {requestId:a.latestRequestId};
+   const profile=(await tx.get(this.db.doc('users/'+uid))).data();
+   let affiliation={};
+   if(profile?.campusId && profile.universityId){
+    const universityRef=this.db.doc('universities/'+id(profile.universityId));
+    const [university,campus]=await Promise.all([
+     tx.get(universityRef),tx.get(universityRef.collection('campuses').doc(id(profile.campusId))),
+    ]);
+    requireThat(university.exists&&campus.exists,'invalid-affiliation');
+    affiliation={universityId:university.id,universityName:university.data().name,
+      campusId:campus.id,campusName:campus.data().name};
+   }
    const requestId=randomUUID();
-   tx.create(this.request(requestId),{uid,institution:'univalle_cochabamba',status:'pending',documentStage:'awaiting_upload',createdAt:stamp(),updatedAt:stamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
+   tx.create(this.request(requestId),{uid,...affiliation,institution:'university_student',status:'pending',documentStage:'awaiting_upload',createdAt:stamp(),updatedAt:stamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000)});
    tx.update(this.account(uid),{verificationStatus:'pending',latestRequestId:requestId,updatedAt:stamp()});
    return {requestId};
   });
@@ -73,9 +94,10 @@ export class VerificationBackend {
    const [meta]=await file.getMetadata();generation=meta.generation;
    requireThat(!meta.metadata?.firebaseStorageDownloadTokens,'private-storage-required');
    await this.db.runTransaction(async tx=>{
-    await this.actor(tx,uid);const r=(await tx.get(this.request(requestId))).data();
+    const a=await this.actor(tx,uid);const r=(await tx.get(this.request(requestId))).data();
     requireThat(r?.uid===uid&&r.status==='pending'&&r.documentStage==='uploading');
     tx.update(this.request(requestId),{documentStage:'ready',generation,updatedAt:stamp()});
+    if(a.latestRequestId===requestId)this.notifications?.writeVerification(tx,uid,requestId,'pending');
    });
    return {ready:true};
   }catch(error){
@@ -83,23 +105,27 @@ export class VerificationBackend {
     const r=(await tx.get(this.request(requestId))).data();
     const a=(await tx.get(this.account(uid))).data();
     if(r){this.cleanup(tx,requestId,path,generation);tx.update(this.request(requestId),{status:'rejected',reasonCode:'upload_failed',resolvedAt:stamp(),updatedAt:stamp()});
-     if(a?.latestRequestId===requestId)tx.update(this.account(uid),{verificationStatus:'rejected',updatedAt:stamp()});}
+     if(a?.latestRequestId===requestId){
+      tx.update(this.account(uid),{verificationStatus:'rejected',updatedAt:stamp()});
+      if(a.suspended===false)this.notifications?.writeVerification(tx,uid,requestId,'rejected');
+     }}
    });
    throw error;
   }
  }
  async withdraw(uid,requestId){
   return this.db.runTransaction(async tx=>{
-   await this.actor(tx,uid);const r=(await tx.get(this.request(requestId))).data();
+   const a=await this.actor(tx,uid);const r=(await tx.get(this.request(requestId))).data();
    requireThat(r?.uid===uid&&r.status==='pending');
    tx.update(this.request(requestId),{status:'rejected',reasonCode:'withdrawn',updatedAt:stamp(),resolvedAt:stamp()});
+   if(a.latestRequestId===requestId)this.notifications?.writeVerification(tx,uid,requestId,'rejected');
    tx.update(this.account(uid),{verificationStatus:'rejected',updatedAt:stamp()});
    if(r.documentPath)this.cleanup(tx,requestId,r.documentPath,r.generation??null);
   });
  }
  async decide(actorId,requestId,status,reasonCode){
   requireThat(['approved','rejected'].includes(status),'invalid-argument');
-  requireThat(status==='approved'?reasonCode==='verified':['unreadable','expired','not_univalle_cochabamba','information_mismatch','other'].includes(reasonCode),'invalid-argument');
+  requireThat(status==='approved'?reasonCode==='verified':['unreadable','expired','not_univalle_cochabamba','institution_mismatch','not_university_student','information_mismatch','other'].includes(reasonCode),'invalid-argument');
   return this.db.runTransaction(async tx=>{
    await this.actor(tx,actorId,true);const r=(await tx.get(this.request(requestId))).data();
    requireThat(r&&r.uid!==actorId);
@@ -110,13 +136,14 @@ export class VerificationBackend {
    tx.update(this.account(r.uid),{verificationStatus:status,updatedAt:stamp()});
    if(profile.exists)tx.update(profile.ref,{datingAllowed:status==='approved'});
    this.audit(tx,actorId,r.uid,'verification_'+status,reasonCode,requestId);
+   this.notifications?.writeVerification(tx,r.uid,requestId,status);
    this.cleanup(tx,requestId,r.documentPath,r.generation);
   });
  }
  async changeRole(actorId,uid,role){
   requireThat(roles.includes(role),'invalid-argument');requireThat(actorId!==uid);
   return this.db.runTransaction(async tx=>{
-   const actor=await this.actor(tx,actorId,true);requireThat(actor.role==='superadmin');
+   const actor=await this.actor(tx,actorId,true);requireThat(actor.role==='superadmin'&&actor.verificationStatus==='approved');
    const target=(await tx.get(this.account(uid))).data(),ref=this.db.doc('administration/roles');
    const registry=(await tx.get(ref)).data();requireThat(target&&roles.includes(target.role)&&registry&&Array.isArray(registry.superadminIds)&&registry.superadminIds.includes(actorId));
    const ids=new Set(registry.superadminIds);
@@ -159,13 +186,13 @@ export class VerificationBackend {
   if(cursor)query=query.startAfter(id(cursor));
   const q=await query.limit(20).get();
   // Lista blanca: ninguna ruta privada, generación ni metadato de almacenamiento.
-  return q.docs.map(d=>{const r=d.data();return {id:d.id,uid:r.uid,status:r.status,documentStage:r.documentStage,createdAt:r.createdAt?.toDate().toISOString(),resolvedAt:r.resolvedAt?.toDate().toISOString(),reasonCode:r.reasonCode??null,reviewedBy:r.reviewedBy??null,canReview:r.uid!==actorId&&r.status==='pending'&&r.documentStage==='ready'};});
+  return q.docs.map(d=>{const r=d.data();return {id:d.id,...(r.universityId?{universityId:r.universityId,universityName:r.universityName,campusName:r.campusName}:{}),uid:r.uid,status:r.status,documentStage:r.documentStage,createdAt:r.createdAt?.toDate().toISOString(),resolvedAt:r.resolvedAt?.toDate().toISOString(),reasonCode:r.reasonCode??null,reviewedBy:r.reviewedBy??null,canReview:r.uid!==actorId&&r.status==='pending'&&r.documentStage==='ready'};});
  }
  async ownRequest(uid){
   return this.db.runTransaction(async tx=>{const a=await this.actor(tx,uid);
    if(!a.latestRequestId)return null;
    const r=(await tx.get(this.request(a.latestRequestId))).data();requireThat(r?.uid===uid);
-   return {id:a.latestRequestId,uid,status:r.status,documentStage:r.documentStage,createdAt:r.createdAt?.toDate().toISOString(),resolvedAt:r.resolvedAt?.toDate().toISOString(),reasonCode:r.reasonCode??null};
+   return {id:a.latestRequestId,...(r.universityId?{universityId:r.universityId,universityName:r.universityName,campusName:r.campusName}:{}),uid,status:r.status,documentStage:r.documentStage,createdAt:r.createdAt?.toDate().toISOString(),resolvedAt:r.resolvedAt?.toDate().toISOString(),reasonCode:r.reasonCode??null};
   });
  }
  async listAudit(actorId,cursor=null){
@@ -199,7 +226,10 @@ export class VerificationBackend {
    await this.db.runTransaction(async tx=>{const current=(await tx.get(doc.ref)).data();if(current?.status!=='pending')return;
     const a=(await tx.get(this.account(current.uid))).data();
     tx.update(doc.ref,{status:'rejected',reasonCode:'expired',resolvedAt:stamp(),updatedAt:stamp()});
-    if(a?.latestRequestId===doc.id)tx.update(this.account(current.uid),{verificationStatus:'rejected',updatedAt:stamp()});
+    if(a?.latestRequestId===doc.id){
+     tx.update(this.account(current.uid),{verificationStatus:'rejected',updatedAt:stamp()});
+     if(a.suspended===false)this.notifications?.writeVerification(tx,current.uid,doc.id,'rejected');
+    }
     if(current.documentPath)this.cleanup(tx,doc.id,current.documentPath,current.generation??null);
    });
   }}

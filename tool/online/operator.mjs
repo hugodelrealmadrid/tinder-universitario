@@ -19,7 +19,7 @@ export async function assertRules(read,mode){
   const rules=await read('https://firebaserules.googleapis.com/v1/'+r.rulesetName);const normalize=s=>s.replace(/\r\n/g,'\n').trim();if(normalize(rules.source?.files?.map(f=>f.content).join('\n')??'')!==normalize(expected[kind]))throw Error('published-rules-mismatch');
  }
 }
-async function io(bucket){
+export async function createOperatorClient(bucket){
  const read=await readClient(),token=await sessionToken();
  const write=async(url,method,body,contentType='application/json')=>{
   const u=new URL(url),firestore=u.origin==='https://firestore.googleapis.com'&&u.pathname===`/v1/projects/${PROJECT}/databases/(default)/documents:commit`,storage=u.origin==='https://storage.googleapis.com'&&(u.pathname===`/upload/storage/v1/b/${bucket}/o`||u.pathname.startsWith(`/storage/v1/b/${bucket}/o/`));
@@ -30,7 +30,7 @@ async function io(bucket){
  const get=async url=>{try{return await read(url);}catch(e){if(e.message.startsWith('read-http-404'))return null;throw e;}};
  return {read,get,write,commit:async writes=>write(root+':commit','POST',{writes})};
 }
-export async function migrate({plan,backup,apply,maintenance,clientFactory=io}){
+export async function migrate({plan,backup,apply,maintenance,clientFactory=createOperatorClient}){
  assertExecution({apply,maintenance,kind:'migrate'});
  if(plan.project!==PROJECT||plan.sourceSha256!==sha(canonical(backup)))throw Error('plan-backup-mismatch');
  const client=await clientFactory(plan.bucket),state=await client.get(marker);
@@ -70,7 +70,7 @@ export async function migrate({plan,backup,apply,maintenance,clientFactory=io}){
  writes.push({update:{name:marker.replace('https://firestore.googleapis.com/v1/',''),fields:encode({state:'committed',sourceSha256:plan.sourceSha256,completedAt:new Date()}).mapValue.fields},currentDocument:{updateTime:current.updateTime}});
  await client.commit(writes);return {migrated:plan.users.length,photos:plan.photos.length,grants:0};
 }
-export async function revoke({plan,apply,maintenance,clientFactory=io}){
+export async function revoke({plan,apply,maintenance,clientFactory=createOperatorClient}){
  assertExecution({apply,maintenance,kind:'revoke'});const client=await clientFactory(plan.bucket);await assertRules(client.read,'strict');const state=await client.read(marker);
  if(value(state.fields.sourceSha256)!==plan.sourceSha256||!['committed','revoked'].includes(value(state.fields.state)))throw Error('migration-not-committed');
  // Confirmar referencias y pruebas actuales antes de revocar; nunca borrar objetos originales.
@@ -84,7 +84,7 @@ export async function revoke({plan,apply,maintenance,clientFactory=io}){
  await client.commit([{update:{name:state.name,fields:{state:encode('revoked')}},updateMask:{fieldPaths:['state']},currentDocument:{updateTime:state.updateTime}}]);return {revoked:true,deleted:0};
 }
 export async function bootstrap({uid,email,reviewConfirmed,apply,bucket}){
- assertExecution({apply,kind:'bootstrap'});if(!/^[A-Za-z0-9_-]{1,128}$/.test(uid??'')||typeof email!=='string')throw Error('confirmed-account-required');const client=await io(bucket);await assertRules(client.read,'strict');const state=await client.read(marker);if(value(state.fields.state)!=='revoked')throw Error('revocation-required-before-bootstrap');
+ assertExecution({apply,kind:'bootstrap'});if(!/^[A-Za-z0-9_-]{1,128}$/.test(uid??'')||typeof email!=='string')throw Error('confirmed-account-required');const client=await createOperatorClient(bucket);await assertRules(client.read,'strict');const state=await client.read(marker);if(value(state.fields.state)!=='revoked')throw Error('revocation-required-before-bootstrap');
  const [access,registry,profile,accounts]=await Promise.all([client.read(root+'/accountAccess/'+uid),client.read(root+'/administration/roles'),client.read(root+'/users/'+uid),client.read(`https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts:batchGet?maxResults=1000&fields=users(localId,email,emailVerified,disabled),nextPageToken`)]);
  if(accounts.nextPageToken)throw Error('account-pagination-review-required');
  const writes=bootstrapWrites({uid,email,authUser:accounts.users?.find(u=>u.localId===uid),access,registry,profile,reviewConfirmed});if(writes.length)await client.commit(writes);return {bootstrap:writes.length>0,idempotent:!writes.length};

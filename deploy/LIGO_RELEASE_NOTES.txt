@@ -1,0 +1,1 @@
+LIGO 1.2.0 (3) — prueba online privada. Identidad LIGO, dashboard y soporte multiuniversidad. Misma aplicación, cuentas y datos. Actualizar backend y reglas antes de distribuir; activación de catálogos bajo control del superadmin.

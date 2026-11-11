@@ -55,6 +55,19 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets(
+    'Una nueva llegada conserva la identidad de burbujas y reproductores anteriores',
+    (tester) async {
+      await seedMessage(1);
+      await open(tester);
+      final previous = tester.element(find.byKey(const ValueKey('m1')));
+      await seedMessage(2);
+      await tester.pumpAndSettle();
+      expect(tester.element(find.byKey(const ValueKey('m1'))), same(previous));
+      expect(find.text('Mensaje 2'), findsOneWidget);
+    },
+  );
+
   testWidgets('Historial de match cerrado no genera nuevas confirmaciones', (
     tester,
   ) async {
@@ -287,6 +300,7 @@ void main() {
       find.byKey(const ValueKey('chat-draft')),
       '  Hola Bob  ',
     );
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('chat-send')));
     await tester.pumpAndSettle();
     expect(find.text('  Hola Bob  '), findsOneWidget);
@@ -306,6 +320,46 @@ void main() {
     );
   });
 
+  testWidgets('Una sola acción: micrófono vacío, envío con texto', (
+    tester,
+  ) async {
+    await open(tester);
+    expect(find.byIcon(Icons.mic), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-send')), findsNothing);
+    await tester.enterText(find.byKey(const ValueKey('chat-draft')), 'Hola');
+    await tester.pump();
+    expect(find.byIcon(Icons.mic), findsNothing);
+    expect(find.byKey(const ValueKey('chat-send')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('chat-draft')), '   ');
+    await tester.pump();
+    expect(find.byIcon(Icons.mic), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-send')), findsNothing);
+  });
+
+  testWidgets('Compositor derecho visible con teclado abierto a 360 px', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 310);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+    await open(tester);
+    final field = find.byKey(const ValueKey('chat-draft'));
+    final mic = find.byIcon(Icons.mic);
+    expect(mic.hitTestable(), findsOneWidget);
+    expect(tester.getCenter(mic).dx, greaterThan(tester.getRect(field).right));
+    expect(tester.getRect(mic).bottom, lessThan(490));
+    await tester.enterText(field, 'Hola');
+    await tester.pump();
+    final send = find.byKey(const ValueKey('chat-send'));
+    expect(mic, findsNothing);
+    expect(send.hitTestable(), findsOneWidget);
+    expect(tester.getCenter(send).dx, greaterThan(tester.getRect(field).right));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'Guardia síncrona impide doble envío y limpia solo al confirmar',
     (tester) async {
@@ -315,6 +369,7 @@ void main() {
         find.byKey(const ValueKey('chat-draft')),
         'Un solo envío',
       );
+      await tester.pump();
       final callback = tester
           .widget<IconButton>(find.byKey(const ValueKey('chat-send')))
           .onPressed!;
@@ -403,12 +458,8 @@ void main() {
         find.textContaining('Puedes consultar el historial'),
         findsOneWidget,
       );
-      expect(
-        tester
-            .widget<IconButton>(find.byKey(const ValueKey('chat-send')))
-            .onPressed,
-        isNull,
-      );
+      expect(find.byKey(const ValueKey('chat-send')), findsNothing);
+      expect(find.byIcon(Icons.mic), findsOneWidget);
       expect(
         tester
             .widget<TextField>(find.byKey(const ValueKey('chat-draft')))

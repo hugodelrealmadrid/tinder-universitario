@@ -38,6 +38,10 @@ android {
         }
         create("production") { dimension = "environment" }
         create("standard") { dimension = "environment" }
+        create("ligostaging") {
+            dimension = "environment"
+            applicationIdSuffix = ".ligostaging"
+        }
         create("demo") {
             dimension = "environment"
             applicationIdSuffix = ".demo"

@@ -38,3 +38,28 @@ export async function validateMedia(bytes,mime){
  }catch(e){if(e instanceof AccessError)throw e;throw new AccessError('invalid-media');}
  finally{decoding--;if(dir){await unlink(join(dir,'input')).catch(()=>{});await rmdir(dir).catch(()=>{});}}
 }
+
+export async function prepareStoryVideo(bytes){
+ if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>15*1024*1024)throw new AccessError('invalid-media');
+ if(decoding>=2)throw new AccessError('rate-limited');
+ decoding++;
+ let dir;
+ try{
+  dir=await mkdtemp(join(tmpdir(),'ligo-story-'));
+  const input=join(dir,'input');
+  await writeFile(input,bytes,{flag:'wx'});
+  const common=['-v','error','-max_alloc','67108864','-protocol_whitelist','file,pipe','-format_whitelist','mov','-enable_drefs','0','-use_absolute_path','0'];
+  const options={timeout:20000,maxBuffer:16*1024*1024,windowsHide:true};
+  const probe=await run(executable('ffprobe'),[...common,'-show_format','-show_streams','-of','json',input],{...options,maxBuffer:131072});
+  const info=JSON.parse(probe.stdout),video=info.streams.filter(s=>s.codec_type==='video'),audio=info.streams.filter(s=>s.codec_type==='audio');
+  const duration=Number(info.format.duration);
+  if(bytes.subarray(4,8).toString()!=='ftyp'||video.length!==1||video[0].codec_name!=='h264'||video[0].width>1920||video[0].height>1920||video[0].disposition?.attached_pic||
+    audio.length>1||audio.some(s=>s.codec_name!=='aac'||s.channels>2)||info.streams.length!==video.length+audio.length||
+    !Number.isFinite(duration)||duration<=0||duration>30)throw Error();
+  await run(executable('ffmpeg'),[...common,'-nostdin','-xerror','-threads','1','-i',input,'-t','31','-f','null','-'],options);
+  const result=await run(executable('ffmpeg'),[...common,'-nostdin','-xerror','-i',input,'-map','0:v:0','-map','0:a?','-map_metadata','-1','-map_chapters','-1','-c','copy','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1'],{...options,encoding:'buffer'});
+  if(!result.stdout.length||result.stdout.length>15*1024*1024)throw Error();
+  return {bytes:result.stdout,durationMs:Math.ceil(duration*1000)};
+ }catch{throw new AccessError('invalid-media');}
+ finally{decoding--;if(dir){await unlink(join(dir,'input')).catch(()=>{});await rmdir(dir).catch(()=>{});}}
+}

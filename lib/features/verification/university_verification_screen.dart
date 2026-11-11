@@ -1,3 +1,7 @@
+import '../notifications/notifications.dart';
+import '../../widgets/app_ui.dart';
+import '../../theme/app_theme.dart';
+import '../../widgets/brand_header.dart';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -9,8 +13,12 @@ const rejectionReasons = <String, String>{
   'unreadable':
       'La fotografía no es legible. Envía una imagen nítida del carnet completo.',
   'expired': 'El carnet o la solicitud venció. Presenta un carnet vigente.',
+  'not_university_student':
+      'El carnet no acredita tu condición de estudiante universitario.',
   'not_univalle_cochabamba':
       'El documento no acredita pertenencia a Univalle sede Cochabamba.',
+  'institution_mismatch':
+      'El carnet no acredita pertenencia a la universidad de esta solicitud.',
   'information_mismatch': 'Los datos del carnet no coinciden con la solicitud.',
   'other':
       'El documento no permite acreditar tu pertenencia universitaria. Revisa las instrucciones y reenvíalo.',
@@ -52,10 +60,12 @@ class UniversityVerificationScreen extends StatefulWidget {
     required this.access,
     required this.logout,
     this.picker,
+    this.onAdministration,
   });
   final VerificationClient client;
   final AccountAccess access;
   final Widget logout;
+  final VoidCallback? onAdministration;
   final Future<(Uint8List, String)?> Function()? picker;
   @override
   State<UniversityVerificationScreen> createState() =>
@@ -212,17 +222,64 @@ class _UniversityVerificationScreenState
         ['ready', 'uploading'].contains(stage);
     final status = _request?['status'] as String? ?? widget.access.status?.name;
     return Scaffold(
-      appBar: AppBar(title: const Text('Verificación universitaria')),
+      appBar: AppBar(
+        title: const BrandHeader('Verificación universitaria'),
+        actions: [
+          const NotificationBell(),
+          if (widget.onAdministration != null)
+            TextButton(
+              onPressed: widget.onAdministration,
+              child: const Text('Administración provisional'),
+            ),
+        ],
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620),
           child: ListView(
             padding: const EdgeInsets.all(24),
             children: [
-              const Icon(Icons.school_outlined, size: 56),
-              const SizedBox(height: 16),
+              const LigoLogo(size: 42),
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: AppColors.rose,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.verified_user_outlined,
+                      color: AppColors.wine,
+                      size: 32,
+                    ),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Text(
+                        'Una comunidad auténtica empieza con personas verificadas.',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Un espacio para estudiantes',
+                style: TextStyle(
+                  fontSize: 27,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -.6,
+                ),
+              ),
+              const SizedBox(height: 8),
               Text(
-                'Univalle · Sede Cochabamba',
+                'Verificación de pertenencia universitaria',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 16),
@@ -230,15 +287,20 @@ class _UniversityVerificationScreenState
                 suspended
                     ? 'Tu cuenta está suspendida administrativamente.'
                     : 'Estado: ${statusLabel(status)}',
-                style: Theme.of(context).textTheme.titleMedium,
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.coral,
+                ),
               ),
+              const SizedBox(height: 12),
               if (!suspended) ...[
                 const Text(
                   'Tu verificación universitaria está pendiente de aprobación hasta que se acepte tu carnet. Las funciones de citas requieren aprobación.',
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'Envía una foto nítida y completa de tu carnet físico o virtual vigente. Deben leerse tu nombre, institución y vigencia. Solo se admite Univalle sede Cochabamba. No envíes documentos de identidad ni información adicional.',
+                  'Envía una foto nítida y completa de tu carnet físico o virtual vigente. Deben leerse tu nombre, institución y vigencia. Aceptamos carnets vigentes de cualquier universidad. No envíes documentos de identidad ni información adicional.',
                 ),
                 const SizedBox(height: 12),
                 const Text(

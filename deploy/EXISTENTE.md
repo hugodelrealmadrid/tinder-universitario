@@ -1,3 +1,5 @@
+> **LIGO (2/11/2026):** para la actualización actual usar [CORTE_LIGO.md](CORTE_LIGO.md). No repetir la migración ni el bootstrap del corte inicial descritos abajo; las cuentas y roles actuales deben conservarse.
+
 # Despliegue preparado: tinder-universitario
 
 NO ejecutado. Esperar autorización para APIs, IAM, recursos, mantenimiento, migración, revocación y publicación. No utilizar la guía de proyecto nuevo PRUEBAS_ONLINE.md para este proyecto existente. No activar otra vez facturación: ya está habilitada. Falta gcloud disponible en PATH y validar la imagen Linux (Docker apagado; Cloud Build preparado como alternativa).
@@ -54,7 +56,7 @@ La concesión explícita al primer superadmin es la ÚNICA excepción aprobada p
 
 ```powershell
 flutter build web --target=lib/main.dart --dart-define-from-file=deploy/existing-project.local.json --output=build/hosted/production
-flutter build apk --debug --flavor=production --target=lib/main.dart --dart-define-from-file=deploy/existing-project.local.json
+flutter build apk --debug --flavor=production --target=lib/main.dart --dart-define-from-file=deploy/existing-project.android.local.json
 node tool/node_modules/firebase-tools/lib/bin/firebase.js deploy --project=tinder-universitario --config=firebase.hosted.json --only=hosting
 ```
 

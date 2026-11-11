@@ -1,3 +1,4 @@
+import {ligoTestTarget} from './ligo/test-target.mjs';
 import {test,before,after,beforeEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -11,12 +12,12 @@ import {VerificationBackend} from './backend/verification.mjs';
 import {uploadChat} from './backend/chat-upload.mjs';
 import {readChat} from './backend/chat-read.mjs';
 import {sealPrivateObject} from './backend/private-object.mjs';
-const project='demo-tinder-phase3-tests';let env,services,backend,png;
+const stage=process.env.LIGO_STAGING_TESTS==='1';const ports=stage?ligoTestTarget().ports:{auth:9199,firestore:8188,storage:9298,hub:4410};const project=stage?ligoTestTarget().project:'demo-tinder-phase3-tests';let env,services,backend,png;
 const context=uid=>env.authenticatedContext(uid,{email:uid+'@demo.test',email_verified:true});
 const account=(status='approved',role='user',suspended=false)=>({role,verificationStatus:status,suspended,latestRequestId:null,createdAt:Timestamp.now(),updatedAt:Timestamp.now()});
 before(async()=>{
- services=await emulatorServices(project,{auth:9199,firestore:8188,storage:9298,hub:4410});backend=new VerificationBackend(services);
- env=await initializeTestEnvironment({projectId:project,firestore:{host:'127.0.0.1',port:8188,rules:await readFile(new URL('../firestore.rules',import.meta.url),'utf8')},storage:{host:'127.0.0.1',port:9298,rules:await readFile(new URL('../storage.rules',import.meta.url),'utf8')}});
+ services=await emulatorServices(project,ports);backend=new VerificationBackend(services);
+ env=await initializeTestEnvironment({projectId:project,firestore:{host:'127.0.0.1',port:ports.firestore,rules:await readFile(new URL('../firestore.rules',import.meta.url),'utf8')},storage:{host:'127.0.0.1',port:ports.storage,rules:await readFile(new URL('../storage.rules',import.meta.url),'utf8')}});
  for(const uid of ['alice','bob','pending','admin','root','root2','missing']){
   try{await services.auth.getUser(uid);}catch{await services.auth.createUser({uid,email:uid+'@demo.test',emailVerified:true});}
  }
@@ -79,7 +80,7 @@ test('Subida directa de chat denegada incluso para usuario aprobado',async()=>{
 test('Migración revoca token real del emulador sin alterar bytes del archivo',async()=>{
  const path='chat_media/alice.bob/alice/old-token';await uploadChat(backend,'alice',path,png,'image/png');
  const file=services.bucket.file(path);await file.setMetadata({metadata:{firebaseStorageDownloadTokens:'old-token-fixture'}});
- const url=`http://127.0.0.1:9298/v0/b/${project}.appspot.com/o/${encodeURIComponent(path)}?alt=media&token=old-token-fixture`;
+ const url=`http://127.0.0.1:${ports.storage}/v0/b/${project}.appspot.com/o/${encodeURIComponent(path)}?alt=media&token=old-token-fixture`;
  const before=await fetch(url);assert.equal(before.status,200);await before.body.cancel();
  await sealPrivateObject(file);const after=await fetch(url);assert.equal(after.status,403);
  assert.deepEqual((await file.download())[0],png);assert.ok(!(await file.getMetadata())[0].metadata?.firebaseStorageDownloadTokens);
@@ -100,7 +101,7 @@ test('Carnet decodificado, privado y sin token; solo lectura backend admin no pr
   const file=ref(context(uid).storage(project+'.appspot.com'),data.documentPath);
   await assertFails(getMetadata(file));await assertFails(getDownloadURL(file));await assertFails(uploadBytes(file,png,{contentType:'image/png'}));
  }
- const response=await fetch(`http://127.0.0.1:9298/v0/b/${project}.appspot.com/o/${encodeURIComponent(data.documentPath)}?alt=media`);assert.notEqual(response.status,200);
+ const response=await fetch(`http://127.0.0.1:${ports.storage}/v0/b/${project}.appspot.com/o/${encodeURIComponent(data.documentPath)}?alt=media`);assert.notEqual(response.status,200);
  await assert.rejects(backend.readDocument('pending',r));
  assert.ok((await backend.readDocument('admin',r)).length>0);
 });
@@ -218,4 +219,26 @@ test('Fase4: paginación de 25 solicitudes permite acceder a todos los registros
  for(let i=0;i<25;i++)await services.db.doc('verificationRequests/page'+String(i).padStart(2,'0')).set({uid:'pending',status:'rejected',documentStage:'deleted',createdAt:Timestamp.now()});
  const first=await backend.listRequests('admin',{status:'rejected'}),second=await backend.listRequests('admin',{status:'rejected',cursor:first.at(-1).id});
  assert.equal(first.length,20);assert.equal(second.length,5);assert.equal(new Set([...first,...second].map(r=>r.id)).size,25);
+});
+
+test('Excepción provisional: privada, pendiente, sin citas ni autoaprobación, expira y no gestiona roles',async()=>{
+ const requestId=await ready(),until=Timestamp.fromMillis(Date.now()+600000);
+ await services.db.doc('accountAccess/pending').update({role:'superadmin',provisionalAdminUntil:until});
+ await services.db.doc('administration/roles').set({superadminIds:['pending']});
+ await services.db.doc('administration/provisionalBootstrap').set({uid:'pending',requestId,state:'active',scope:'online_test',independentReview:false,expiresAt:until});
+ await services.db.doc('users/pending').set({datingAllowed:false,isActive:true});
+ assert.ok((await backend.listRequests('pending')).some(r=>r.id===requestId&&r.canReview===false));
+ await assert.rejects(backend.decide('pending',requestId,'approved','verified'));
+ await assert.rejects(backend.readDocument('pending',requestId));
+ await assert.rejects(backend.changeRole('pending','alice','admin'));
+ const db=context('pending').firestore();await assertFails(getDoc(doc(db,'matches/alice.bob')));
+ await assertFails(setDoc(doc(db,'accountAccess/pending'),{verificationStatus:'approved'}));
+ await assertFails(setDoc(doc(db,'administration/provisionalBootstrap'),{expiresAt:new Date(Date.now()+99999999)}));
+ const r=(await services.db.doc('verificationRequests/'+requestId).get()).data();
+ const file=services.bucket.file(r.documentPath),[meta]=await file.getMetadata();assert.ok(!meta.metadata?.firebaseStorageDownloadTokens);
+ await services.db.doc('accountAccess/pending').update({suspended:true});await assert.rejects(backend.listRequests('pending'));
+ await services.db.doc('accountAccess/pending').update({suspended:false});
+ await services.db.doc('administration/provisionalBootstrap').update({expiresAt:Timestamp.fromMillis(1)});await assert.rejects(backend.listRequests('pending'));
+ assert.equal((await services.db.doc('accountAccess/pending').get()).data().verificationStatus,'pending');
+ assert.equal((await services.db.doc('users/pending').get()).data().datingAllowed,false);
 });

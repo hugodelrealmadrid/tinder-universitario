@@ -53,3 +53,17 @@ test('El Job recupera y actualiza cursores desde Firestore entre ejecuciones',as
  assert.equal(state.get('maintenanceCursors/profilePhotoAssets').after,null);
  await cleanupMedia({db});assert.equal(seen.length,1);
 });
+
+ test('Antes del corte: incluso un token válido no puede leer ni provisionar datos',async()=>{
+ const services={auth:{async verifyIdToken(token,revoked){assert.equal(revoked,true);if(token!=='valid')throw Error('invalid');return {uid:'synthetic'};}}};
+ const server=createServer(requestHandler(services,{operationsEnabled:false}));
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const url=`http://127.0.0.1:${server.address().port}`;
+ try{assert.equal((await fetch(url+'/administration/audit')).status,401);assert.equal((await fetch(url,{headers:{Authorization:'Bearer invalid'}})).status,401);for(const path of ['/account/provision','/verification/decide','/administration/role','/chat/upload','/profile/upload'])assert.equal((await fetch(url+path,{method:'POST',headers:{Authorization:'Bearer valid'}})).status,503);assert.equal((await fetch(url+'/verification/own',{headers:{Authorization:'Bearer valid'}})).status,503);}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
+test('Autorización administrativa exige rol aprobado y cuenta no suspendida',async()=>{
+ const {VerificationBackend}=await import('./verification.mjs');let account;const b=new VerificationBackend({db:{doc:path=>({path})}});const tx={get:async()=>({data:()=>account})};
+ for(const a of [undefined,{role:'user',verificationStatus:'approved',suspended:false},{role:'admin',verificationStatus:'pending',suspended:false},{role:'superadmin',verificationStatus:'approved',suspended:true}]){account=a;await assert.rejects(()=>b.actor(tx,'synthetic',true));}
+ for(const role of ['admin','superadmin']){account={role,verificationStatus:'approved',suspended:false};assert.equal((await b.actor(tx,'synthetic',true)).role,role);}
+});

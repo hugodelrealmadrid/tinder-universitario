@@ -26,7 +26,7 @@ export async function permittedCard(b,token,uid,path){
  const owner=photoPath(path)[1],project=b.db.projectId,host=process.env.FIRESTORE_EMULATOR_HOST;
  const origin=b.firestoreOrigin;
  const remote=origin==='https://firestore.googleapis.com'&&!project.startsWith('demo-')&&!host;
- const local=project.startsWith('demo-')&&/^127\.0\.0\.1:(8088|8188)$/.test(host);
+ const local=project.startsWith('demo-')&&(/^127\.0\.0\.1:(8088|8188)$/.test(host)||(project==='demo-ligo-staging'&&host==='127.0.0.1:8288')||(project==='demo-ligo-validation'&&host==='127.0.0.1:8488'));
  if(!remote&&!local)throw new AccessError('permission-denied');
  const base=remote?origin:`http://${host}`;
  for(const collection of ['discoveryCards','matchProfiles']){
@@ -47,7 +47,49 @@ export async function readPhoto(b,uid,path,token){
    if(!profile?.photoUrls?.includes(path)&&!(p[1]===uid&&asset.state==='ready'&&asset.expiresAt.toMillis()>Date.now()))throw new AccessError('permission-denied');return asset;});
   if(p[1]!==uid)await permittedCard(b,token,uid,path);return a;
  };
- const a=await check(),file=b.bucket.file(path),[meta]=await file.getMetadata();
- if(meta.generation!==a.generation||meta.contentType!==a.mime||Number(meta.size)!==a.size)throw new AccessError('invalid-media');
- const [bytes]=await file.download();if(digest(bytes)!==a.sha256)throw new AccessError('invalid-media');await check();return {bytes,contentType:a.mime};
+ const asset=await check();
+ const result=await verifiedPhotoBytes(b,path,asset);
+ await check();
+ return result;
+}
+
+async function verifiedPhotoBytes(b,path,asset){
+ const file=b.bucket.file(path),[meta]=await file.getMetadata();
+ if(meta.generation!==asset.generation||meta.contentType!==asset.mime||Number(meta.size)!==asset.size)throw new AccessError('invalid-media');
+ const [bytes]=await file.download();
+ if(digest(bytes)!==asset.sha256)throw new AccessError('invalid-media');
+ return {bytes,contentType:asset.mime};
+}
+
+// Únicamente referencias privadas del propietario; nunca URLs ni carnets.
+export function dossierPhotoPaths(profile,uid){
+ const listed=Array.isArray(profile?.photoUrls)?profile.photoUrls:[];
+ const owned=listed.filter(path=>{
+  try{return photoPath(path)[1]===uid;}catch{return false;}
+ });
+ return [...new Set([...(owned.includes(profile?.mainPhotoUrl)?[profile.mainPhotoUrl]:[]),...owned])].slice(0,6);
+}
+
+export async function readDossierPhoto(b,actorId,path){
+ const check=async(previous)=>b.db.runTransaction(async tx=>{
+  const actor=await b.actor(tx,actorId,true);
+  if(actor.verificationStatus!=='approved')throw new AccessError('permission-denied');
+  const [,owner]=photoPath(path);
+  const profile=(await tx.get(b.db.doc('users/'+owner))).data();
+  const asset=(await tx.get(photoAsset(b,path))).data();
+  if(!dossierPhotoPaths(profile,owner).includes(path)||asset?.uid!==owner||asset.path!==path||
+    !['ready','published'].includes(asset.state)||!['image/jpeg','image/png','image/webp'].includes(asset.mime)){
+   throw new AccessError('permission-denied');
+  }
+  if(previous){
+   if(asset.generation!==previous.generation||asset.sha256!==previous.sha256||
+      asset.size!==previous.size||asset.mime!==previous.mime)throw new AccessError('permission-denied');
+   b.audit(tx,actorId,owner,'profile_photo_viewed','administrative_dossier',null,'success');
+  }
+  return asset;
+ });
+ const asset=await check();
+ const result=await verifiedPhotoBytes(b,path,asset);
+ await check(asset);
+ return result;
 }

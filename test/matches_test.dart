@@ -200,10 +200,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('like-button')));
     await tester.pumpAndSettle();
     expect(find.text('¡Es un match!'), findsOneWidget);
-    expect(
-      find.text('No hay más perfiles compatibles por ahora.'),
-      findsOneWidget,
-    );
+    expect(find.text('Abrir conversación'), findsOneWidget);
+    await tester.tap(find.text('Continuar descubriendo'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ya viste los perfiles compatibles'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

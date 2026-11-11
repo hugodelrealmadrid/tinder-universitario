@@ -16,7 +16,10 @@ abstract final class ProfileGender {
 }
 
 class CatalogItem {
-  const CatalogItem(this.id, this.name);
+  const CatalogItem(this.id, this.name, {this.isActive = true});
+  final bool isActive;
+  factory CatalogItem.fromMap(String id, Map<String, dynamic> d) =>
+      CatalogItem(id, d['name'] as String, isActive: d['isActive'] == true);
   final String id;
   final String name;
 }
@@ -30,6 +33,8 @@ class StudentProfile {
     this.gender = '',
     this.description = '',
     this.careerId,
+    this.universityId,
+    this.campusId,
     this.photoUrls = const [],
     this.mainPhotoUrl,
     this.interestIds = const [],
@@ -37,7 +42,7 @@ class StudentProfile {
   });
   final String firstName, lastName, email, gender, description;
   final DateTime? birthDate;
-  final String? careerId, mainPhotoUrl;
+  final String? careerId, mainPhotoUrl, universityId, campusId;
   final List<String> photoUrls, interestIds;
   final bool isActive;
 
@@ -49,6 +54,8 @@ class StudentProfile {
     gender: data['gender'] as String? ?? '',
     description: data['description'] as String? ?? '',
     careerId: data['careerId'] as String?,
+    universityId: data['universityId'] as String?,
+    campusId: data['campusId'] as String?,
     photoUrls: List<String>.from(data['photoUrls'] as List? ?? []),
     mainPhotoUrl: data['mainPhotoUrl'] as String?,
     interestIds: List<String>.from(data['interestIds'] as List? ?? []),
@@ -76,6 +83,8 @@ class StudentProfile {
     gender: gender,
     description: description,
     careerId: careerId,
+    universityId: universityId,
+    campusId: campusId,
     photoUrls: urls,
     mainPhotoUrl: main,
     interestIds: interestIds,

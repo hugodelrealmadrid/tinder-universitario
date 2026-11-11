@@ -1,5 +1,8 @@
+import '../auth/academic_selector.dart';
+import '../../widgets/brand_header.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/pick_ligo_photo.dart';
 import '../preferences/discovery_preferences.dart' show ageOn;
 
 import 'package:flutter/foundation.dart';
@@ -80,8 +83,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
     try {
       final profile = await _service.load(widget.uid);
-      final careers = await _service.catalog('careers');
-      final interests = await _service.catalog('interests');
+      final careers = await _service.catalog(
+        'careers',
+        retainedIds: [if (profile.careerId != null) profile.careerId!],
+      );
+      if (profile.universityId != null && profile.campusId != null) {
+        final offerings = await _service.campusCareers(
+          profile.universityId!,
+          profile.campusId!,
+        );
+        careers.removeWhere(
+          (career) =>
+              career.id != profile.careerId && !offerings.contains(career.id),
+        );
+      }
+      final interests = await _service.catalog(
+        'interests',
+        retainedIds: profile.interestIds,
+      );
       if (!mounted) return;
       setState(() {
         _careers = careers;
@@ -117,6 +136,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     description: _description.text,
     birthDate: _birthDate,
     careerId: _activeCareerId,
+    universityId: _profile?.universityId,
+    campusId: _profile?.campusId,
     interestIds: _selectedInterests.toList(),
     photoUrls: _profile!.photoUrls,
     mainPhotoUrl: _profile!.mainPhotoUrl,
@@ -168,6 +189,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _completeAffiliation() async {
+    final profile = _profile!;
+    final directory = AcademicDirectory();
+    AcademicChoice? choice;
+    final result = await showDialog<AcademicChoice>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Completar afiliación universitaria'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Selecciona una sede que ofrezca tu carrera. Se conservarán la universidad y la carrera que ya tengas guardadas.',
+                ),
+                const SizedBox(height: 12),
+                AcademicSelector(
+                  directory: directory,
+                  retainedUniversity: profile.universityId,
+                  retainedCareer: profile.careerId,
+                  onChanged: (value) => setDialogState(() => choice = value),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: choice == null
+                  ? null
+                  : () => Navigator.pop(context, choice),
+              child: const Text('Guardar sede'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    await _run(() async {
+      final offerings = await _service.campusCareers(
+        result.universityId,
+        result.campusId,
+      );
+      await _service.completeAffiliation(widget.uid, result);
+      if (!mounted) return;
+      _careerId = result.careerId;
+      _careers.removeWhere((career) => !offerings.contains(career.id));
+    }, success: 'Afiliación guardada.');
+  }
+
   Future<void> _upload(XFile file) => _run(() async {
     if (await file.length() > maxPhotoBytes) {
       throw const ProfileException('Cada imagen debe pesar como máximo 5 MB.');
@@ -180,11 +256,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _busy = true);
     XFile? file;
     try {
-      file = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1600,
-        imageQuality: 85,
-      );
+      file = await pickLigoPhoto(context, _picker);
     } catch (error) {
       if (mounted) setState(() => _error = _message(error));
     } finally {
@@ -225,7 +297,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Mi perfil')),
+    appBar: AppBar(title: const BrandHeader('Mi perfil')),
     body: SafeArea(
       child: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -412,6 +484,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           maxDescriptionLength,
                           lines: 4,
                         ),
+                        if (_profile?.universityId case final university?)
+                          AcademicLabel(
+                            university: university,
+                            campus: _profile?.campusId,
+                          ),
+                        if (const bool.fromEnvironment(
+                              'LIGO_MULTIUNIVERSITY',
+                            ) &&
+                            _profile?.campusId == null)
+                          OutlinedButton(
+                            onPressed: _busy ? null : _completeAffiliation,
+                            child: const Text(
+                              'Completar afiliación universitaria',
+                            ),
+                          ),
                         DropdownButtonFormField<String>(
                           key: ValueKey('career-${_activeCareerId ?? 'none'}'),
                           initialValue: _activeCareerId,
@@ -423,6 +510,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               .map(
                                 (item) => DropdownMenuItem(
                                   value: item.id,
+                                  enabled:
+                                      item.isActive ||
+                                      item.id == _profile!.careerId,
                                   child: Text(
                                     item.name,
                                     overflow: TextOverflow.ellipsis,
@@ -462,7 +552,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   selected: _selectedInterests.contains(
                                     item.id,
                                   ),
-                                  onSelected: _busy
+                                  onSelected:
+                                      (_busy ||
+                                          (!item.isActive &&
+                                              !_selectedInterests.contains(
+                                                item.id,
+                                              )))
                                       ? null
                                       : (selected) {
                                           if (selected &&
@@ -660,12 +755,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final career = _careers
         .where((item) => item.id == profile.careerId)
         .firstOrNull;
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final complete = profile.missingFields().isEmpty;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(height: 240, child: AppPhoto(url: profile.mainPhotoUrl)),
+          if (compact)
+            Padding(
+              padding: const EdgeInsets.only(top: 24),
+              child: Center(
+                child: Container(
+                  width: 116,
+                  height: 116,
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: AppColors.gradient,
+                  ),
+                  child: ClipOval(child: AppPhoto(url: profile.mainPhotoUrl)),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 420,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AppPhoto(url: profile.mainPhotoUrl),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0xAA17171D)],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 22,
+                    bottom: 22,
+                    right: 22,
+                    child: Text(
+                      profile.firstName.trim().isEmpty
+                          ? 'Tu perfil, tu historia'
+                          : profile.firstName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 34,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
@@ -681,7 +828,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 8),
                   Text(
                     career.name,
-                    style: const TextStyle(color: AppColors.muted),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
                 if (profile.description.trim().isNotEmpty) ...[
@@ -700,6 +849,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ],
                 const SizedBox(height: 16),
+                Text(
+                  complete
+                      ? 'Perfil completo'
+                      : 'Completá tu perfil para aparecer en Descubrir',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: _busy
                       ? null

@@ -1,3 +1,3 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-    <application android:label="Tinder Universitario" tools:replace="android:label" android:usesCleartextTraffic="false" />
+    <application android:label="LIGO" tools:replace="android:label" android:usesCleartextTraffic="false" />
 </manifest>

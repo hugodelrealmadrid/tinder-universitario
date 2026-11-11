@@ -6,10 +6,16 @@ enum UniversityStatus { pending, approved, rejected }
 
 /// Ausencia, tipos incorrectos y valores desconocidos siempre deniegan citas.
 class AccountAccess {
-  const AccountAccess({this.role, this.status, required this.suspended});
+  const AccountAccess({
+    this.role,
+    this.status,
+    required this.suspended,
+    this.provisionalAdminUntil,
+  });
   final AccountRole? role;
   final UniversityStatus? status;
   final bool suspended;
+  final DateTime? provisionalAdminUntil;
   factory AccountAccess.fromMap(Map<String, dynamic>? data) {
     T? parse<T extends Enum>(List<T> values, Object? name) {
       for (final value in values) {
@@ -22,11 +28,20 @@ class AccountAccess {
       role: parse(AccountRole.values, data?['role']),
       status: parse(UniversityStatus.values, data?['verificationStatus']),
       suspended: data?['suspended'] != false,
+      provisionalAdminUntil: data?['provisionalAdminUntil'] is Timestamp
+          ? (data!['provisionalAdminUntil'] as Timestamp).toDate()
+          : null,
     );
   }
   bool get canDate =>
       role != null && status == UniversityStatus.approved && !suspended;
-  bool get canAdminister => canDate && role != AccountRole.user;
+  bool get provisionalAdministration =>
+      role == AccountRole.superadmin &&
+      status == UniversityStatus.pending &&
+      !suspended &&
+      provisionalAdminUntil?.isAfter(DateTime.now()) == true;
+  bool get canAdminister =>
+      (canDate && role != AccountRole.user) || provisionalAdministration;
 }
 
 class UniversityRequest {

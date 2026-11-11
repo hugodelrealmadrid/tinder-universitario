@@ -1,0 +1,15 @@
+{
+  "firestore": {"rules": "firestore.rules"},
+  "storage": [{"bucket": "tinder-universitario-showcase.firebasestorage.app", "rules": "storage.rules"}],
+  "hosting": {
+    "site": "tinder-universitario-showcase",
+    "public": "build/hosted/showcase",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "_demo/**"],
+    "rewrites": [{"source": "**", "destination": "/index.html"}],
+    "headers": [{"source": "**", "headers": [
+      {"key": "X-Content-Type-Options", "value": "nosniff"},
+      {"key": "Referrer-Policy", "value": "no-referrer"},
+      {"key": "Permissions-Policy", "value": "microphone=(self), camera=()"}
+    ]}]
+  }
+}

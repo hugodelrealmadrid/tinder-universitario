@@ -1,0 +1,1 @@
+<resources><style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar"><item name="android:windowSplashScreenBackground">#FF315A</item><item name="android:windowSplashScreenAnimatedIcon">@drawable/ligo_foreground</item><item name="android:windowBackground">@drawable/launch_background</item></style></resources>

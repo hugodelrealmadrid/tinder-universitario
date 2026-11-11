@@ -68,6 +68,10 @@ class ChatService {
         message.createdAt == null) {
       return;
     }
+    if (VerificationClient.datingWritesEnabled) {
+      await VerificationClient().sendChatReceipt(matchId, message.id);
+      return;
+    }
     await _db
         .collection('matches')
         .doc(matchId)
@@ -175,14 +179,24 @@ class ChatService {
     try {
       await _mediaStore.upload(path, bytes, contentType);
       await _mediaStore.verifyUpload(path, bytes.length, contentType);
-      await message.set({
-        'senderId': uid,
-        'text': '',
-        'type': type,
-        'mediaPath': path,
-        'durationMs': ?durationMs,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      if (VerificationClient.datingWritesEnabled) {
+        await VerificationClient().sendChatMessage(
+          matchId,
+          message.id,
+          '',
+          type: type,
+          durationMs: durationMs,
+        );
+      } else {
+        await message.set({
+          'senderId': uid,
+          'text': '',
+          'type': type,
+          'mediaPath': path,
+          'durationMs': ?durationMs,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
     } catch (_) {
       try {
         // Una respuesta perdida no significa que Firestore no haya guardado.
@@ -204,6 +218,14 @@ class ChatService {
   Future<void> send(String matchId, String uid, String draft) async {
     final text = ChatLimits.normalize(draft);
     final parent = _db.collection('matches').doc(matchId);
+    if (VerificationClient.datingWritesEnabled) {
+      await VerificationClient().sendChatMessage(
+        matchId,
+        parent.collection('messages').doc().id,
+        text,
+      );
+      return;
+    }
     final match = _participant(
       await parent.get(const GetOptions(source: Source.server)),
       uid,
@@ -324,7 +346,7 @@ class FirebaseChatMediaStore implements ChatMediaStore {
 }
 
 String chatError(Object error) {
-  if(error is VerificationFailure) return error.message;
+  if (error is VerificationFailure) return error.message;
   if (error is ChatException) return error.message;
   if (error is FirebaseException && error.code == 'permission-denied') {
     return 'No tienes permiso para esta acción. El match puede estar inactivo.';

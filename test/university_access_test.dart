@@ -32,7 +32,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Administración'), findsOneWidget);
+      expect(find.byType(AdministrationScreen), findsOneWidget);
       showDialog<void>(
         context: tester.element(find.byType(AdministrationScreen)),
         builder: (_) => PrivateDocumentView(client: api, requestId: 'r'),

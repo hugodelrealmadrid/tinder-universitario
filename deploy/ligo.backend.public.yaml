@@ -1,0 +1,7 @@
+# Solo valores públicos; conserva proyecto/bucket/orígenes actuales. Sin credenciales.
+APP_ENV: "production"
+GOOGLE_CLOUD_PROJECT: "tinder-universitario"
+TINDER_PROJECT_ID: "tinder-universitario"
+TINDER_STORAGE_BUCKET: "tinder-universitario.firebasestorage.app"
+TINDER_WEB_ORIGINS: "https://tinder-universitario.web.app,https://tinder-universitario.firebaseapp.com"
+TINDER_PRE_CUTOVER: "false"

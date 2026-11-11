@@ -1,11 +1,11 @@
 {
-    "name": "tinder_universitario",
-    "short_name": "tinder_universitario",
+    "name": "LIGO",
+    "short_name": "LIGO",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FF315A",
+    "theme_color": "#FF315A",
+    "description": "LIGO · Conectá con personas que comparten tu mundo.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

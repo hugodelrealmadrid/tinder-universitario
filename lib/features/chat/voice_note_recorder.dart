@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../../theme/app_theme.dart';
 import 'audio_playback.dart';
 import 'voice_note_controller.dart';
 
+/// Gestos y accesibilidad comparten el mismo controlador; nunca abre otro micrófono.
 class VoiceNoteRecorder extends StatefulWidget {
   const VoiceNoteRecorder({
     super.key,
@@ -11,11 +13,13 @@ class VoiceNoteRecorder extends StatefulWidget {
     required this.onSend,
     required this.onBusy,
     this.capture,
+    this.composer,
   });
   final bool enabled;
   final Future<void> Function(Uint8List) onSend;
   final ValueChanged<bool> onBusy;
   final VoiceCapture? capture;
+  final Widget Function(Widget action)? composer;
   @override
   State<VoiceNoteRecorder> createState() => _VoiceNoteRecorderState();
 }
@@ -25,63 +29,7 @@ class _VoiceNoteRecorderState extends State<VoiceNoteRecorder>
   late final _controller = VoiceNoteController(
     widget.capture ?? RecordVoiceCapture(),
   );
-  bool _cancelGesture = false, _lastBusy = false;
-  bool _choosingDevice = false;
-  Future<void> _chooseDevice() async {
-    final capture = _controller.capture;
-    if (capture is! RecordVoiceCapture || _choosingDevice) return;
-    setState(() => _choosingDevice = true);
-    try {
-      final devices = await capture.devices();
-      if (!mounted) return;
-      if (devices.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No se encontraron micrófonos. Revisa los permisos del sitio y del sistema.',
-            ),
-          ),
-        );
-        return;
-      }
-      final selected = await showDialog<int>(
-        context: context,
-        builder: (context) => SimpleDialog(
-          title: const Text('Selecciona el micrófono'),
-          children: [
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, -1),
-              child: const Text('Predeterminado del sistema'),
-            ),
-            for (var i = 0; i < devices.length; i++)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, i),
-                child: Text(
-                  devices[i].label.isEmpty
-                      ? 'Micrófono ${i + 1}'
-                      : devices[i].label,
-                ),
-              ),
-          ],
-        ),
-      );
-      if (!mounted || selected == null) return;
-      setState(() => capture.device = selected < 0 ? null : devices[selected]);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No se pudo consultar el micrófono. Revisa los permisos.',
-            ),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _choosingDevice = false);
-    }
-  }
-
+  bool _cancelled = false, _locked = false, _lastBusy = false;
   @override
   void initState() {
     super.initState();
@@ -109,13 +57,9 @@ class _VoiceNoteRecorderState extends State<VoiceNoteRecorder>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) unawaited(_controller.discard());
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (ModalRoute.of(context)?.isCurrent == false) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        (state == AppLifecycleState.inactive && !_controller.starting)) {
       unawaited(_controller.discard());
     }
   }
@@ -128,133 +72,250 @@ class _VoiceNoteRecorderState extends State<VoiceNoteRecorder>
     super.dispose();
   }
 
+  void _start({bool locked = false}) {
+    if (!widget.enabled || _controller.busy) return;
+    _cancelled = false;
+    _locked = locked;
+    unawaited(_controller.begin());
+  }
+
+  Future<void> _released() async {
+    final c = _controller;
+    if (_cancelled || _locked) return;
+    // Si el permiso seguía abierto o la voz es breve/baja, se revisa antes de enviar.
+    final send = c.recording && !c.starting && !c.signal.quiet;
+    await c.finish();
+    if (!mounted || _cancelled || !widget.enabled) return;
+    if (send && c.draft != null) await c.send(widget.onSend);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = _controller;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (c.error != null) Text(c.error!),
-          if (c.warning != null) Text(c.warning!),
-          if (c.recording) ...[
-            LinearProgressIndicator(
-              value: c.signal.meter,
-              semanticsLabel: 'Nivel de entrada del micrófono',
-            ),
-            Text(
-              c.signal.samples == 0
-                  ? 'Esperando señal del micrófono…'
-                  : c.signal.silent
-                  ? 'Sin sonido: habla y comprueba el micrófono'
-                  : 'Se recibe señal del micrófono',
-            ),
-          ],
-          if (!c.busy && c.capture is RecordVoiceCapture)
-            TextButton.icon(
-              onPressed: !widget.enabled || _choosingDevice
-                  ? null
-                  : _chooseDevice,
-              icon: const Icon(Icons.settings_voice),
-              label: Text(
-                _choosingDevice
-                    ? 'Consultando micrófonos…'
-                    : 'Micrófono: ${(c.capture as RecordVoiceCapture).device?.label ?? 'predeterminado'}',
-              ),
-            ),
-          if (c.draft != null) ...[
-            AudioPlayback(
-              key: ValueKey(c.draft),
-              bytes: c.draft!,
-              mime: 'audio/wav',
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                TextButton(
-                  onPressed: c.sending ? null : c.discard,
-                  child: const Text('Descartar nota'),
+    final panel = AnimatedSize(
+      duration: const Duration(milliseconds: 180),
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (c.error != null)
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  c.error!,
+                  style: const TextStyle(color: AppColors.danger),
                 ),
-                FilledButton(
-                  onPressed: !widget.enabled || c.sending
-                      ? null
-                      : () => c.send(widget.onSend),
-                  child: Text(
-                    c.sending ? 'Enviando nota…' : 'Enviar nota de voz',
+              ),
+            if (c.warning != null)
+              Text(c.warning!, style: const TextStyle(color: AppColors.muted)),
+            if (c.draft != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
                   ),
                 ),
-              ],
-            ),
-          ] else
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                GestureDetector(
-                  onTap: !widget.enabled
-                      ? null
-                      : () => c.recording ? c.finish() : c.begin(),
-                  onLongPressStart: !widget.enabled
-                      ? null
-                      : (_) {
-                          _cancelGesture = false;
-                          unawaited(c.begin());
-                        },
-                  onLongPressMoveUpdate: (d) {
-                    if (d.offsetFromOrigin.dx < -70) {
-                      _cancelGesture = true;
-                      unawaited(c.discard());
-                    }
-                  },
-                  onLongPressEnd: (_) {
-                    if (!_cancelGesture) unawaited(c.finish());
-                  },
-                  child: Tooltip(
-                    triggerMode: TooltipTriggerMode.manual,
-                    message:
-                        'Mantén presionado para grabar; desliza a la izquierda para cancelar',
-                    child: Semantics(
-                      label: 'Grabar nota de voz',
-                      button: true,
-                      onTap: !widget.enabled
-                          ? null
-                          : () => c.recording ? c.finish() : c.begin(),
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        child: Icon(
-                          Icons.mic,
-                          color: c.recording ? Colors.red : null,
-                        ),
+                child: Column(
+                  children: [
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Escucha tu nota',
+                        style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
-                  ),
-                ),
-                if (c.recording || c.starting || c.stopping) ...[
-                  Flexible(
-                    child: Text(
-                      c.starting
-                          ? 'Preparando micrófono…'
-                          : '${c.seconds}s / 60s · Desliza ← para cancelar',
+                    AudioPlayback(
+                      key: ValueKey(c.draft),
+                      bytes: c.draft!,
+                      mime: 'audio/wav',
                     ),
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        TextButton.icon(
+                          onPressed: c.sending ? null : c.discard,
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Descartar nota'),
+                        ),
+                        FilledButton.icon(
+                          onPressed:
+                              !widget.enabled ||
+                                  c.sending ||
+                                  c.deliveryUncertain
+                              ? null
+                              : () => c.send(widget.onSend),
+                          icon: const Icon(Icons.send_rounded, size: 18),
+                          label: Text(
+                            c.sending ? 'Enviando nota…' : 'Enviar nota de voz',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ] else if (widget.composer == null || c.busy)
+              Row(
+                children: [
+                  if (widget.composer == null) _microphone(c),
+                  if (widget.composer == null) const SizedBox(width: 12),
+
+                  Expanded(
+                    child: c.recording || c.starting || c.stopping
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                c.starting
+                                    ? 'Preparando micrófono…'
+                                    : c.stopping
+                                    ? 'Preparando nota…'
+                                    : '${c.seconds.toString().padLeft(2, '0')}s · ${_locked ? 'Grabación bloqueada' : '← Cancelar · ↑ Bloquear'}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              if (c.recording && !c.stopping)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    c.signal.samples == 0
+                                        ? 'Esperando señal…'
+                                        : c.signal.silent
+                                        ? 'Sin sonido: revisa el micrófono'
+                                        : 'Se recibe señal del micrófono',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color:
+                                          c.signal.samples > 0 &&
+                                              c.signal.silent
+                                          ? AppColors.danger
+                                          : AppColors.muted,
+                                    ),
+                                  ),
+                                ),
+                              if (c.recording && !c.stopping)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: LinearProgressIndicator(
+                                    value: c.signal.meter,
+                                    semanticsLabel:
+                                        'Nivel de entrada del micrófono',
+                                    minHeight: 3,
+                                  ),
+                                ),
+                            ],
+                          )
+                        : const Text(
+                            'Mantén para hablar\n← cancela · ↑ bloquea para revisar',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.muted,
+                            ),
+                          ),
                   ),
-                  IconButton(
-                    tooltip: 'Detener y escuchar',
-                    onPressed: c.finish,
-                    icon: const Icon(Icons.stop),
-                  ),
-                  IconButton(
-                    tooltip: 'Cancelar grabación',
-                    onPressed: c.discard,
-                    icon: const Icon(Icons.close),
-                  ),
-                ] else
-                  const Flexible(
-                    child: Text('Mantén presionado para grabar una nota'),
-                  ),
-              ],
-            ),
-        ],
+                  if (c.recording || c.starting) ...[
+                    IconButton(
+                      tooltip: 'Cancelar grabación',
+                      onPressed: () {
+                        _cancelled = true;
+                        unawaited(c.discard());
+                      },
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                    IconButton(
+                      tooltip: 'Detener y escuchar',
+                      onPressed: c.stopping ? null : c.finish,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                    ),
+                  ],
+                ],
+              ),
+          ],
+        ),
       ),
     );
+    if (widget.composer == null) return panel;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        panel,
+        widget.composer!(
+          c.draft == null ? _microphone(c) : const SizedBox(width: 52),
+        ),
+      ],
+    );
   }
+
+  Widget _microphone(VoiceNoteController c) => GestureDetector(
+    onTap: !widget.enabled
+        ? null
+        : () {
+            if (c.recording) {
+              unawaited(c.finish());
+            } else {
+              _start(locked: true);
+            }
+          },
+    onLongPressStart: !widget.enabled ? null : (_) => _start(),
+    onLongPressMoveUpdate: (d) {
+      if (_locked || _cancelled) return;
+      if (d.offsetFromOrigin.dx < -80) {
+        _cancelled = true;
+        unawaited(c.discard());
+      } else if (d.offsetFromOrigin.dy < -75) {
+        setState(() => _locked = true);
+      }
+    },
+    onLongPressEnd: (_) => unawaited(_released()),
+    onLongPressCancel: () {
+      if (!_locked && c.busy) {
+        _cancelled = true;
+        unawaited(c.discard());
+      }
+    },
+    child: Semantics(
+      label: 'Grabar nota de voz',
+      button: true,
+      onTap: !widget.enabled ? null : () => _start(locked: true),
+      child: Tooltip(
+        message: 'Mantén para grabar · ← cancelar · ↑ bloquear',
+        triggerMode: TooltipTriggerMode.manual,
+        child: AnimatedContainer(
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : AppMotion.fast,
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: widget.enabled ? AppColors.coral : AppColors.line,
+            shape: BoxShape.circle,
+            boxShadow: c.recording && !MediaQuery.disableAnimationsOf(context)
+                ? [
+                    BoxShadow(
+                      color: AppColors.coral.withValues(
+                        alpha: .2 + .25 * c.signal.meter,
+                      ),
+                      blurRadius: 18,
+                      spreadRadius: 4 * c.signal.meter,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Icon(
+            _locked && c.recording ? Icons.lock_rounded : Icons.mic,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    ),
+  );
 }

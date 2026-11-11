@@ -160,7 +160,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Esto confirma tu acceso al correo; no acredita pertenencia a Univalle.',
+            'Esto confirma tu acceso al correo; no acredita tu pertenencia universitaria.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppColors.muted, fontSize: 12),
           ),

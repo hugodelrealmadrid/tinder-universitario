@@ -12,8 +12,10 @@ class PrivateProfilePhoto extends StatefulWidget {
     required this.placeholder,
     required this.failure,
     this.loader,
+    this.alignment = Alignment.center,
   });
   final String path;
+  final Alignment alignment;
   final Widget placeholder;
   final Widget Function(Object, VoidCallback) failure;
   final Future<Uint8List> Function(String)? loader;
@@ -114,6 +116,7 @@ class _PrivateProfilePhotoState extends State<PrivateProfilePhoto>
       ? RawImage(
           image: _image,
           fit: BoxFit.cover,
+          alignment: widget.alignment,
           width: double.infinity,
           height: double.infinity,
         )

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import '../../widgets/app_ui.dart';
+import '../../widgets/photo_story.dart';
+import '../../theme/app_theme.dart';
 import '../discovery/discovery_models.dart';
 import 'student_match.dart';
 
@@ -109,12 +110,16 @@ class _PublicProfileState extends State<_PublicProfile> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
           child: ListView(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(AppTheme.pagePadding),
             children: [
               SizedBox(
-                height: 360,
-                child: PageView(
-                  children: photos.map((u) => AppPhoto(url: u)).toList(),
+                height: (MediaQuery.sizeOf(context).height * .5).clamp(
+                  300,
+                  520,
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(24),
+                  child: PhotoStory(photos: photos),
                 ),
               ),
               Text('${photos.length} fotos · Desliza para verlas'),

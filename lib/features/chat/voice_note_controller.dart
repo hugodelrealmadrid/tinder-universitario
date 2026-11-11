@@ -28,8 +28,6 @@ abstract interface class VoiceCapture {
 
 class RecordVoiceCapture implements VoiceCapture {
   RecordVoiceCapture({AudioRecorder? recorder}) : _instance = recorder;
-  InputDevice? device;
-  Future<List<InputDevice>> devices() => _recorder.listInputDevices();
   AudioRecorder? _instance;
   AudioRecorder get _recorder => _instance ??= AudioRecorder();
   @override
@@ -41,7 +39,6 @@ class RecordVoiceCapture implements VoiceCapture {
         encoder: AudioEncoder.pcm16bits,
         sampleRate: 16000,
         numChannels: 1,
-        device: device,
         autoGain: true,
         echoCancel: true,
         noiseSuppress: true,
@@ -104,6 +101,7 @@ class VoiceNoteController extends ChangeNotifier {
   bool recording = false, starting = false, stopping = false, sending = false;
   bool _discardRequested = false, _disposed = false;
   Uint8List? draft;
+  bool deliveryUncertain = false;
   String? error;
   String? warning;
   VoiceSignal signal = VoiceSignal();
@@ -119,6 +117,7 @@ class VoiceNoteController extends ChangeNotifier {
     starting = true;
     error = null;
     warning = null;
+    deliveryUncertain = false;
     signal = VoiceSignal();
     _discardRequested = false;
     _pcm = BytesBuilder(copy: false);
@@ -163,7 +162,7 @@ class VoiceNoteController extends ChangeNotifier {
       _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         if (seconds >= 3 && signal.samples == 0) {
           error =
-              'No llegan muestras del micrófono. Revisa el permiso y la entrada seleccionada.';
+              'No llegan muestras del micrófono. Revisa el permiso del micrófono del sistema.';
           unawaited(discard());
         } else if (seconds >= maxSeconds) {
           unawaited(finish());
@@ -207,12 +206,12 @@ class VoiceNoteController extends ChangeNotifier {
       }
       if (signal.silent) {
         error =
-            'No se detectó sonido. Revisa el micrófono seleccionado, su volumen y si está silenciado.';
+            'No se detectó sonido. Revisa el volumen del micrófono y si está silenciado.';
         return;
       }
       if (signal.quiet) {
         warning =
-            'El volumen grabado es muy bajo. Escucha la nota antes de enviarla o prueba otra entrada.';
+            'El volumen grabado es muy bajo. Escucha la nota antes de enviarla o revisa el micrófono del sistema.';
       }
       draft = voiceWav(pcm.sublist(0, pcm.length - pcm.length % 2));
     } catch (_) {
@@ -233,6 +232,7 @@ class VoiceNoteController extends ChangeNotifier {
     _timer?.cancel();
     _clock.stop();
     draft = null;
+    deliveryUncertain = false;
     await _starting;
     await capture.cancel().catchError((_) {});
     await _subscription?.cancel();
@@ -242,7 +242,7 @@ class VoiceNoteController extends ChangeNotifier {
   }
 
   Future<void> send(Future<void> Function(Uint8List) publish) async {
-    if (draft == null || sending || _disposed) return;
+    if (draft == null || sending || deliveryUncertain || _disposed) return;
     sending = true;
     error = null;
     _notify();
@@ -250,9 +250,9 @@ class VoiceNoteController extends ChangeNotifier {
       await publish(draft!);
       draft = null;
     } catch (_) {
-      draft = null;
+      deliveryUncertain = true;
       error =
-          'No se pudo confirmar el envío. Revisa el chat antes de volver a grabar.';
+          'No se pudo confirmar el envío. Tu grabación sigue disponible para escuchar. Revisa el chat antes de descartarla; no se reenviará automáticamente.';
     } finally {
       sending = false;
       _notify();

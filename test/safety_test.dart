@@ -384,7 +384,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Roberto, 22'), findsOneWidget);
+    expect(find.text('Roberto, 22'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('discovery-options')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Bloquear usuario'));

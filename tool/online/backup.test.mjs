@@ -27,3 +27,8 @@ test('DPAPI: lectura recupera contenido y alteración es rechazada',{skip:proces
  const check=saveEncrypted(file,value);assert.equal(sha(readFileSync(file)),check.cipherSha256);assert.deepEqual(loadEncrypted(file),value);assert.equal(readFileSync(file).includes(Buffer.from(value.secret)),false);
  const bad=readFileSync(file);bad[bad.length-8]^=1;writeFileSync(join(dir,'tampered.dpapi'),bad);assert.throws(()=>loadEncrypted(join(dir,'tampered.dpapi')));
 });
+
+test('El respaldo de Storage se limita al bucket Firebase, no a fuentes de compilación',async()=>{
+ const {listObjects}=await import('./backup.mjs');const bucket='tinder-universitario.firebasestorage.app',calls=[];const read=async url=>{calls.push(url);if(url==='https://storage.googleapis.com/storage/v1/b/'+bucket)return {name:bucket};assert.ok(url.startsWith('https://storage.googleapis.com/storage/v1/b/'+bucket+'/o?'));return {items:[]};};
+ const result=await listObjects(read);assert.equal(result.buckets.length,1);assert.equal(result.buckets[0].name,bucket);assert.equal(calls.length,2);
+});

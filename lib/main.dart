@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'app_environment.dart';
-import 'package:flutter/services.dart' show appFlavor;
+import 'package:flutter/services.dart' show appFlavor, SystemUiOverlayStyle;
 import 'features/auth/auth_gate.dart';
 import 'features/auth/auth_service.dart';
 
@@ -18,8 +18,23 @@ class TinderUniversitarioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: 'Tinder Universitario',
-    theme: AppTheme.light,
+    title: const bool.fromEnvironment('SHOWCASE_ONLINE')
+        ? 'Tinder DEMO Online'
+        : 'LIGO',
+    builder: const bool.fromEnvironment('SHOWCASE_ONLINE')
+        ? (context, child) => Banner(
+            message: 'DEMO ONLINE',
+            location: BannerLocation.topEnd,
+            color: Colors.deepPurple,
+            child: child ?? const SizedBox.shrink(),
+          )
+        : (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+            value: AppTheme.nightSystemBars,
+            child: child ?? const SizedBox.shrink(),
+          ),
+    theme: const bool.fromEnvironment('SHOWCASE_ONLINE')
+        ? AppTheme.light
+        : AppTheme.night,
     home: const FirebaseStartup(),
   );
 }

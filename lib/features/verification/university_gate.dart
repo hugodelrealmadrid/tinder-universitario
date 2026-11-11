@@ -1,3 +1,5 @@
+import '../notifications/notifications.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../auth/auth_form.dart';
@@ -29,12 +31,15 @@ class _UniversityGateState extends State<UniversityGate> {
   bool _wasAllowed = false;
   AccountRole? _lastRole;
   bool _dating = false;
+  bool _provisionalPanel = false;
+  Timer? _provisionalExpiry;
   VerificationClient? _ownedClient;
   VerificationClient get _client =>
       widget.client ??
       (_ownedClient ??= VerificationClient(auth: widget.service.auth));
   @override
   void dispose() {
+    _provisionalExpiry?.cancel();
     _ownedClient?.close();
     super.dispose();
   }
@@ -48,51 +53,89 @@ class _UniversityGateState extends State<UniversityGate> {
       }
       final a = snapshot.data;
       final allowed = !snapshot.hasError && a?.canDate == true;
-      if (_wasAllowed && (!allowed || _lastRole != a?.role)) {
+      final adminAllowed = !snapshot.hasError && a?.canAdminister == true;
+      _provisionalExpiry?.cancel();
+      if (a?.provisionalAdministration == true) {
+        _provisionalExpiry = Timer(
+          a!.provisionalAdminUntil!.difference(DateTime.now()),
+          () {
+            if (mounted) setState(() {});
+          },
+        );
+      }
+      if (_wasAllowed && (!(allowed || adminAllowed) || _lastRole != a?.role)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
         });
       }
-      _wasAllowed = allowed;
+      _wasAllowed = allowed || adminAllowed;
       _lastRole = a?.role;
+      if (!adminAllowed) _provisionalPanel = false;
+      if (adminAllowed && !allowed && _provisionalPanel) {
+        return AdministrationScreen(
+          client: _client,
+          access: a!,
+          uid: widget.uid,
+          logout: LogoutButton(service: widget.service),
+          onDating: () => setState(() => _provisionalPanel = false),
+        );
+      }
+      Widget withNotifications(Widget child) =>
+          ligoNotifications && a?.role != null && a?.suspended == false
+          ? NotificationHub(
+              key: ValueKey(widget.uid),
+              service: widget.service,
+              uid: widget.uid,
+              child: child,
+            )
+          : child;
       if (allowed) {
         if (a!.canAdminister) {
           if (!_dating) {
-            return AdministrationScreen(
-              client: _client,
-              access: a,
-              uid: widget.uid,
-              logout: LogoutButton(service: widget.service),
-              onDating: () => setState(() => _dating = true),
+            return withNotifications(
+              AdministrationScreen(
+                client: _client,
+                access: a,
+                uid: widget.uid,
+                logout: LogoutButton(service: widget.service),
+                onDating: () => setState(() => _dating = true),
+              ),
             );
           }
-          return Column(
-            children: [
-              Material(
-                child: SafeArea(
-                  bottom: false,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => setState(() => _dating = false),
-                      child: const Text('Administración'),
+          return withNotifications(
+            Column(
+              children: [
+                Material(
+                  child: SafeArea(
+                    bottom: false,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => setState(() => _dating = false),
+                        child: const Text('Administración'),
+                      ),
                     ),
                   ),
                 ),
-              ),
-              Expanded(child: widget.child),
-            ],
+                Expanded(child: widget.child),
+              ],
+            ),
           );
         }
-        return widget.child;
+        return withNotifications(widget.child);
       }
       _dating = false;
       if (!snapshot.hasError) {
-        return UniversityVerificationScreen(
-          key: ValueKey(widget.uid),
-          client: _client,
-          access: a ?? const AccountAccess(suspended: true),
-          logout: LogoutButton(service: widget.service),
+        return withNotifications(
+          UniversityVerificationScreen(
+            key: ValueKey(widget.uid),
+            client: _client,
+            access: a ?? const AccountAccess(suspended: true),
+            onAdministration: adminAllowed
+                ? () => setState(() => _provisionalPanel = true)
+                : null,
+            logout: LogoutButton(service: widget.service),
+          ),
         );
       }
       final message = snapshot.hasError

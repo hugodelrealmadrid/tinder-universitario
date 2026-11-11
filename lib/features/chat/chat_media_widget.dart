@@ -133,7 +133,11 @@ class _ChatMediaWidgetState extends State<ChatMediaWidget> {
             ),
           );
         }
-        return AudioPlayback(bytes: data.bytes, mime: data.contentType);
+        return AudioPlayback(
+          bytes: data.bytes,
+          mime: data.contentType,
+          durationMs: widget.durationMs,
+        );
       },
     );
   }
