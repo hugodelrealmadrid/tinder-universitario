@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {
+      "name": "gcr.io/cloud-builders/docker",
+      "args": [
+        "build",
+        "-f",
+        "deploy/Dockerfile",
+        "-t",
+        "${_IMAGE}",
+        "."
+      ]
+    },
+    {
+      "name": "gcr.io/cloud-builders/docker",
+      "args": [
+        "run",
+        "--rm",
+        "--network=none",
+        "--entrypoint=node",
+        "${_IMAGE}",
+        "--input-type=module",
+        "-e",
+        "import sharp from 'sharp';\nimport {validateMedia} from './backend/media-validation.mjs';\nconst png=await sharp({create:{width:8,height:8,channels:3,background:'#123456'}}).png().toBuffer();\nif((await validateMedia(png,'image/png')).type!=='image')throw Error('image-validation');\nconst samples=8000,wav=Buffer.alloc(44+samples*2);\nwav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(samples*2,40);\nfor(let i=0;i<samples;i++)wav.writeInt16LE(Math.round(Math.sin(i*2*Math.PI*440/16000)*1000),44+i*2);\nconst audio=await validateMedia(wav,'audio/wav');if(audio.type!=='audio'||audio.durationMs!==500)throw Error('audio-validation');\nconsole.log('Linux: imagen PNG y audio WAV decodificados; sin red ni Firebase. No prueba captura de micrófono.');\n"
+      ]
+    }
+  ],
+  "images": [
+    "${_IMAGE}"
+  ],
+  "timeout": "1200s"
+}

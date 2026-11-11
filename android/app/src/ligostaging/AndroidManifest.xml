@@ -1,0 +1,1 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools"><application android:label="LIGO STAGING" tools:replace="android:label" android:networkSecurityConfig="@xml/ligo_network_security" /></manifest>

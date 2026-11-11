@@ -28,8 +28,8 @@ void main() {
     'gender': ProfileGender.female,
     'description': 'Lectura y música',
     'careerId': 'sistemas',
-    'photoUrls': ['https://example.test/photo.jpg'],
-    'mainPhotoUrl': 'https://example.test/photo.jpg',
+    'photoUrls': ['profile_photos/bob/photo'],
+    'mainPhotoUrl': 'profile_photos/bob/photo',
     'interestIds': ['musica'],
     'role': 'user',
     'isActive': true,
@@ -53,7 +53,7 @@ void main() {
   DiscoveryCandidate candidate({
     String id = 'bob',
     bool active = true,
-    String photo = 'https://example.test/photo.jpg',
+    String photo = 'profile_photos/bob/photo',
   }) => DiscoveryCandidate(
     id: id,
     firstName: 'Bob',
@@ -347,6 +347,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Bob, 22'), findsOneWidget);
       expect(find.text('Ingeniería de Sistemas Informáticos'), findsOneWidget);
+      await tester.tap(find.byTooltip('Información del perfil'));
+      await tester.pumpAndSettle();
       expect(find.text('Música'), findsOneWidget);
       expect(find.text('uidPrivado'), findsNothing);
       expect(find.text(birth.toIso8601String()), findsNothing);

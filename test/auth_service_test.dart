@@ -158,6 +158,19 @@ void main() {
       expect(await service.ensureProfile(TestUser()), isFalse);
     },
   );
+  testWidgets('Atrás desde registro vuelve a iniciar sesión', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: AuthGate(service: service)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Crear una cuenta'));
+    await tester.pumpAndSettle();
+    expect(find.text('Crear cuenta'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Iniciar sesión'), findsOneWidget);
+    expect(auth.registrations, 0);
+  });
+
   testWidgets(
     'AuthGate restaura usuario del stream y vuelve al login al cerrar sesión',
     (tester) async {
@@ -169,14 +182,24 @@ void main() {
       await service.ensureProfile(TestUser());
       // Este test conserva la regresión de entrada normal con cuenta verificada.
       auth.current = TestUser(verified: true);
+      await db.doc('accountAccess/ana').set({
+        'role': 'user',
+        'verificationStatus': 'approved',
+        'suspended': false,
+      });
       await tester.pumpWidget(MaterialApp(home: AuthGate(service: service)));
       await tester.pumpAndSettle();
-      expect(find.text('Univalle · Cochabamba'), findsOneWidget);
-      await tester.ensureVisible(find.text('Cerrar sesión'));
+      expect(find.text('Tu comunidad universitaria'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Cerrar sesión'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Cerrar sesión'));
       await tester.pumpAndSettle();
       expect(find.text('Correo electrónico'), findsOneWidget);
-      expect(find.text('Univalle · Cochabamba'), findsNothing);
+      expect(find.text('Tu comunidad universitaria'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

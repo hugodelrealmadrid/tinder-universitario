@@ -210,12 +210,13 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-unmatch')));
     await tester.pumpAndSettle();
     expect(closing.calls, 1);
-    expect(
-      tester
-          .widget<IconButton>(find.byKey(const ValueKey('chat-send')))
-          .onPressed,
-      isNull,
+    final microphone = find.ancestor(
+      of: find.byIcon(Icons.mic),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is GestureDetector && widget.child is Semantics,
+      ),
     );
+    expect(tester.widget<GestureDetector>(microphone).onLongPressStart, isNull);
     expect(
       tester
           .widget<PopupMenuButton<String>>(

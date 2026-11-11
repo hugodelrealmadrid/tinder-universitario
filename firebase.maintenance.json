@@ -1,0 +1,1 @@
+{"firestore":{"rules":"deploy/firestore.maintenance.rules"},"storage":{"rules":"storage.rules"}}

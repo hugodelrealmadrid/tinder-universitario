@@ -1,6 +1,9 @@
+import '../preferences/discovery_preferences.dart';
+import 'academic_selector.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import '../verification/account_access.dart';
 
 bool isAdult(DateTime birthDate, {DateTime? today}) {
   final now = today ?? DateTime.now();
@@ -76,7 +79,19 @@ class AuthService extends ChangeNotifier {
        _db = firestore ?? FirebaseFirestore.instance,
        _now = now ?? DateTime.now;
   final FirebaseAuth _auth;
+  FirebaseAuth get auth => _auth;
   final FirebaseFirestore _db;
+  Stream<AccountAccess> watchAccountAccess(String uid) => _db
+      .collection('accountAccess')
+      .doc(uid)
+      .snapshots(includeMetadataChanges: true)
+      .map(
+        (s) => AccountAccess.fromMap(
+          s.metadata.isFromCache || s.metadata.hasPendingWrites
+              ? null
+              : s.data(),
+        ),
+      );
   final DateTime Function() _now;
   DateTime? _registrationBirthDate;
   // Incluye los cambios producidos por reload(), además de login/logout.
@@ -167,6 +182,45 @@ class AuthService extends ChangeNotifier {
     );
   }
 
+  AcademicChoice? _academicChoice;
+  AcademicRegistration? _academicRegistration;
+  AcademicRegistration? get pendingAcademicRegistration =>
+      _academicRegistration;
+  DateTime? get pendingRegistrationBirthDate => _registrationBirthDate;
+
+  AcademicDirectory get academicDirectory => AcademicDirectory(_db);
+
+  Future<void> registerAcademic(
+    String email,
+    String password,
+    DateTime birthDate,
+    AcademicChoice choice, {
+    AcademicRegistration? registration,
+  }) async {
+    _academicChoice = choice;
+    _academicRegistration = registration;
+    try {
+      await register(email, password, birthDate);
+    } catch (_) {
+      _academicChoice = null;
+      _academicRegistration = null;
+      rethrow;
+    }
+  }
+
+  void restoreAcademicChoice(AcademicChoice? choice) =>
+      _academicChoice = choice;
+
+  Future<bool> resumeAcademicRegistration(
+    User user,
+    DateTime date,
+    AcademicRegistration registration,
+  ) {
+    _academicChoice = registration.choice;
+    _academicRegistration = registration;
+    return ensureProfile(user, birthDate: date);
+  }
+
   Future<void> register(
     String email,
     String password,
@@ -194,44 +248,75 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  Future<void> Function()? beforeLogout;
+
   Future<void> logout() async {
+    await beforeLogout?.call();
     await _auth.signOut();
     _registrationBirthDate = null;
+    _academicChoice = null;
+    _academicRegistration = null;
     _resetVerification();
     notifyListeners();
   }
 
   /// Auth y Firestore no son atómicos. AuthGate espera esta escritura y
   /// permite reintentar sin crear otra cuenta ni sobrescribir perfiles.
+  bool get hasPendingBirthDate => _registrationBirthDate != null;
   Future<bool> ensureProfile(User user, {DateTime? birthDate}) async {
     final date = birthDate ?? _registrationBirthDate;
+    final registration = _academicRegistration;
+    final affiliation = _academicChoice;
     final reference = _db.collection('users').doc(user.uid);
+    final preferences = _db.collection('preferences').doc(user.uid);
     final ready = await _db.runTransaction<bool>((transaction) async {
       final existing = await transaction.get(reference);
       if (existing.exists) return true;
       if (date == null) return false;
+      final existingPreferences = registration == null
+          ? null
+          : await transaction.get(preferences);
       if (!isAdult(date)) throw ArgumentError('Debes tener al menos 18 años.');
       transaction.set(reference, {
-        'firstName': '',
-        'lastName': '',
+        'firstName': registration?.firstName ?? '',
+        'lastName': registration?.lastName ?? '',
         'email': user.email ?? '',
         'birthDate': Timestamp.fromDate(
           DateTime.utc(date.year, date.month, date.day),
         ),
         'gender': '',
         'description': '',
-        'careerId': null,
+        'careerId': affiliation?.careerId,
+        if (affiliation case final choice?) ...{
+          'universityId': choice.universityId,
+          'campusId': choice.campusId,
+        },
         'photoUrls': <String>[],
         'mainPhotoUrl': null,
-        'interestIds': <String>[],
+        'interestIds': registration?.interests ?? <String>[],
         'role': 'user',
         'isActive': false,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      if (registration != null && existingPreferences?.exists == false) {
+        transaction.set(preferences, registration.preferences.toFirestore());
+      }
       return true;
     });
-    if (ready) _registrationBirthDate = null;
+    if (ready) {
+      _registrationBirthDate = null;
+      _academicChoice = null;
+      _academicRegistration = null;
+    }
     return ready;
   }
 }
+
+typedef AcademicRegistration = ({
+  String firstName,
+  String lastName,
+  AcademicChoice choice,
+  List<String> interests,
+  DiscoveryPreferences preferences,
+});

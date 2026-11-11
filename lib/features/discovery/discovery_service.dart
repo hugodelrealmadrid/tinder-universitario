@@ -1,3 +1,4 @@
+import '../verification/backend_client.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../preferences/discovery_preferences.dart';
 import '../preferences/preferences_service.dart';
@@ -18,12 +19,16 @@ class DiscoveryService {
   void cancel() => _cancelled = true;
   void exclude(String uid) => _decided.add(uid);
   String? _uid;
+  String? _ownPhoto;
+  String? _university;
+  String? get ownPhoto => _ownPhoto;
   DiscoveryPreferences? _preferences;
   final Map<String, String> careerNames = {}, interestNames = {};
 
   Future<void> start(String uid) async {
     _cancelled = false;
     _uid = uid;
+    _ownPhoto = null;
     _cursor = null;
     _exhausted = false;
     _pending.clear();
@@ -36,6 +41,8 @@ class DiscoveryService {
       throw const DiscoveryException('Completa tu perfil antes de descubrir.');
     }
     final profile = StudentProfile.fromMap(user.data()!);
+    _ownPhoto = profile.mainPhotoUrl;
+    _university = user.data()?['universityId'] as String?;
     if (!profile.isActive || !profile.isComplete) {
       throw const DiscoveryException(
         'Completa y activa tu perfil para descubrir personas.',
@@ -69,7 +76,6 @@ class DiscoveryService {
     for (final collection in ['careers', 'interests']) {
       final snapshot = await _db
           .collection(collection)
-          .where('isActive', isEqualTo: true)
           .get(const GetOptions(source: Source.server));
       final names = collection == 'careers' ? careerNames : interestNames;
       for (final doc in snapshot.docs) {
@@ -118,7 +124,17 @@ class DiscoveryService {
             .get(const GetOptions(source: Source.server));
         if (!card.exists) continue;
         final candidate = DiscoveryCandidate.fromMap(card.id, card.data()!);
-        if (candidate.eligibleFor(_uid!, _preferences!, _decided) &&
+        if (candidate.eligibleFor(
+              _uid!,
+              _preferences!,
+              _decided,
+              viewerUniversity: _university,
+              demoMode:
+                  const bool.fromEnvironment('TINDER_DEMO') &&
+                  _db.app.options.projectId == 'demo-tinder-universitario' &&
+                  _db.app.options.storageBucket ==
+                      'demo-tinder-universitario.appspot.com',
+            ) &&
             careerNames.containsKey(candidate.careerId)) {
           return candidate;
         }
@@ -137,6 +153,18 @@ class DiscoveryService {
     final id = SwipeDecision.idFor(from, to);
     if (!SwipeDecision.isValid(type)) {
       throw const DiscoveryException('Decisión inválida.');
+    }
+    if (VerificationClient.datingWritesEnabled) {
+      try {
+        final created = await VerificationClient().decideDiscovery(to, type);
+        _decided.add(to);
+        return created;
+      } on VerificationFailure catch (error) {
+        throw DiscoveryException(
+          error.message,
+          alreadyDecided: error.code == 'already-decided',
+        );
+      }
     }
     Future<bool> commit() => _db.runTransaction<bool>((tx) async {
       if ((await tx.get(

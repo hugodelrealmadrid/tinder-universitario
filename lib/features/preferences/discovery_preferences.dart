@@ -32,14 +32,48 @@ class DiscoveryPreferences {
     required this.minAge,
     required this.maxAge,
     required this.preferredGender,
+    this.careerIds = const [],
+    this.universityMode = 'all',
+    this.universityIds = const [],
+    this.interestIds = const [],
   });
   final int minAge, maxAge;
   final String preferredGender;
+
+  /// Vacío conserva el comportamiento anterior: cualquier carrera.
+  final List<String> careerIds, universityIds, interestIds;
+  final String universityMode;
+
+  bool acceptsAffiliation(
+    String? own,
+    String? candidate,
+    List<String> interests,
+  ) =>
+      (interestIds.isEmpty || interestIds.any(interests.contains)) &&
+      switch (universityMode) {
+        'mine' => own != null && own == candidate,
+        'selected' => universityIds.contains(candidate),
+        _ => true,
+      };
+  static bool _validIds(List<String> ids) =>
+      ids.length <= 5 &&
+      ids.toSet().length == ids.length &&
+      ids.every((id) => RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(id));
+  bool acceptsCareer(String id) => careerIds.isEmpty || careerIds.contains(id);
   bool get isValid =>
       minAge >= DiscoveryLimits.minAge &&
       minAge <= maxAge &&
       maxAge <= DiscoveryLimits.maxAge &&
-      PreferredGender.isValid(preferredGender);
+      PreferredGender.isValid(preferredGender) &&
+      _validIds(careerIds) &&
+      _validIds(interestIds) &&
+      _validIds(universityIds) &&
+      ['all', 'mine', 'selected'].contains(universityMode) &&
+      (universityMode != 'selected' || universityIds.isNotEmpty) &&
+      careerIds.length +
+              interestIds.length +
+              (universityMode == 'selected' ? universityIds.length : 0) <=
+          9;
   bool accepts({
     required String gender,
     required DateTime birthDate,
@@ -64,11 +98,25 @@ class DiscoveryPreferences {
         minAge: data['minAge'] as int,
         maxAge: data['maxAge'] as int,
         preferredGender: data['preferredGender'] as String,
+        careerIds: List<String>.from(data['careerIds'] as List? ?? []),
+        universityMode: data['universityMode'] as String? ?? 'all',
+        universityIds: data['universityMode'] == 'selected'
+            ? List<String>.from(data['universityIds'] as List? ?? [])
+            : const [],
+        interestIds: List<String>.from(data['interestIds'] as List? ?? []),
       );
   Map<String, dynamic> toFirestore() => {
     'minAge': minAge,
     'maxAge': maxAge,
     'preferredGender': preferredGender,
+    'careerIds': careerIds,
+    if (universityMode != 'all' ||
+        const bool.fromEnvironment('LIGO_MULTIUNIVERSITY'))
+      'universityMode': universityMode,
+    if (universityMode == 'selected') 'universityIds': universityIds,
+    if (interestIds.isNotEmpty ||
+        const bool.fromEnvironment('LIGO_MULTIUNIVERSITY'))
+      'interestIds': interestIds,
     'updatedAt': FieldValue.serverTimestamp(),
   };
 }

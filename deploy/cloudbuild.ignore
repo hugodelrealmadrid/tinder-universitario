@@ -1,0 +1,12 @@
+**
+!tool/
+!tool/package.json
+!tool/package-lock.json
+!tool/backend/
+!tool/backend/*.mjs
+tool/backend/*.test.mjs
+tool/backend/emulator.mjs
+tool/backend/server.mjs
+!deploy/
+!deploy/Dockerfile
+!.dockerignore

@@ -106,7 +106,20 @@ void main() {
         key: const ValueKey('capture'),
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: AppTheme.light,
+          theme: const bool.fromEnvironment('LIGO_VISUAL_NIGHT')
+              ? AppTheme.night.copyWith(
+                  filledButtonTheme: FilledButtonThemeData(
+                    style: AppTheme.night.filledButtonTheme.style?.copyWith(
+                      textStyle: const WidgetStatePropertyAll(
+                        TextStyle(
+                          fontFamily: 'Roboto',
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              : AppTheme.light,
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(
               context,
@@ -118,6 +131,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (const String.fromEnvironment('UI_CAPTURE_DIR').isNotEmpty) {
+      await tester.runAsync(
+        () => precacheImage(
+          const AssetImage('assets/branding/ligo/campus-hero.png'),
+          tester.element(find.byType(MaterialApp)),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
     expect(tester.takeException(), isNull);
   }
 
@@ -194,20 +216,21 @@ void main() {
         ),
         size: size,
       );
-      expect(find.text('Roberto, 24'), findsOneWidget);
+      expect(find.text('Roberto, 24'), findsWidgets);
       expect(
         tester.getSize(find.byType(CandidateView)).width,
-        lessThanOrEqualTo(520),
+        lessThanOrEqualTo(size.width >= 1280 ? 1280 : size.width),
+      );
+      expect(
+        tester.getSize(find.byType(CandidateView)).width,
+        greaterThan(size.width * .75),
       );
       await capture(tester, 'discovery-${size.width.toInt()}');
       await tester.ensureVisible(find.byKey(const ValueKey('like-button')));
       await tester.tap(find.byKey(const ValueKey('like-button')));
       await tester.pumpAndSettle();
       expect(service.decisions, ['like']);
-      expect(
-        find.text('No hay más perfiles compatibles por ahora.'),
-        findsOneWidget,
-      );
+      expect(find.text('Ya viste los perfiles compatibles'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }
@@ -234,6 +257,8 @@ void main() {
       ),
       scale: 1.5,
     );
+    await tester.tap(find.byTooltip('Información del perfil'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text(_candidate.description));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -327,7 +352,7 @@ void main() {
       ),
     );
     await capture(tester, 'matches');
-    await tester.tap(find.byType(MatchTile));
+    await tester.tap(find.text('Abrir chat'));
     await tester.pumpAndSettle();
     expect(find.byType(ChatScreen), findsOneWidget);
     expect(tester.takeException(), isNull);

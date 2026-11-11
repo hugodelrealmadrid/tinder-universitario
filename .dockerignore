@@ -1,0 +1,14 @@
+# Contexto cerrado: excluye exports, credenciales, build, demo y código cliente.
+**
+!tool/
+!tool/package.json
+!tool/package-lock.json
+!tool/backend/
+!tool/backend/*.mjs
+!deploy/
+!deploy/Dockerfile
+
+# Tampoco incorporar las entradas y pruebas locales del backend.
+tool/backend/*.test.mjs
+tool/backend/emulator.mjs
+tool/backend/server.mjs

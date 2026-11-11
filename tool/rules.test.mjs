@@ -2,32 +2,68 @@ import { readFile } from 'node:fs/promises';
 // HU-15 se prueba al final de esta suite, sin operaciones sobre Firebase remoto.
 import { test, before, after, beforeEach } from 'node:test';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, setDoc, updateDoc, getDoc, getDocs, collection, Timestamp, serverTimestamp, query, where, limit, orderBy, documentId, writeBatch, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, deleteObject, getMetadata } from 'firebase/storage';
+import { doc, setDoc, updateDoc, getDocFromServer as getDoc, getDocsFromServer as getDocs, collection, Timestamp, serverTimestamp, query, where, limit, orderBy, documentId, writeBatch, deleteDoc } from 'firebase/firestore';
+import { ref, uploadBytes as directUploadBytes, getMetadata as directGetMetadata, getDownloadURL, deleteObject as directDeleteObject } from 'firebase/storage';
+import {readChat} from './backend/chat-read.mjs';
+import {emulatorServices} from './backend/emulator.mjs';
+import {VerificationBackend} from './backend/verification.mjs';
+import {uploadChat,deleteChat} from './backend/chat-upload.mjs';
+import {uploadPhoto,readPhoto,deletePhoto} from './backend/profile-media.mjs';
+import {imageFixture,audioFixture} from './test-media.mjs';
 import { runTransaction, onSnapshot } from 'firebase/firestore';
 import assert from 'node:assert/strict';
 
 let env;
-const baseUrl = uid => `https://firebasestorage.googleapis.com/v0/b/tinder-universitario.firebasestorage.app/o/profile_photos%2F${uid}%2Fphoto1?alt=media&token=abc-123`;
+let backend;
+const storageOwners=new Map();
+const rulesProject=process.env.RULES_PROJECT??'demo-tinder-universitario';
+const firestorePort=Number(process.env.RULES_FIRESTORE_PORT??8088);
+const storagePort=Number(process.env.RULES_STORAGE_PORT??9198);
+if(!rulesProject.startsWith('demo-'))throw new Error('Solo proyectos demo');
+const baseUrl = uid => `profile_photos/${uid}/photo1`;
 const initial = () => ({firstName:'',lastName:'',email:'ana@example.com',birthDate:Timestamp.fromDate(new Date('2000-01-01T00:00:00Z')),gender:'',description:'',careerId:null,photoUrls:[],mainPhotoUrl:null,interestIds:[],role:'user',isActive:false,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-const context = uid => env.authenticatedContext(uid, {email:`${uid}@example.com`});
+const context = uid => {
+ const ctx=env.authenticatedContext(uid, {email:`${uid}@example.com`});
+ const storage=ctx.storage.bind(ctx);ctx.storage=(bucket=rulesProject+'.appspot.com')=>{const s=storage(bucket);storageOwners.set(s.app.name,uid);return s;};return ctx;
+};
+// La fase 3 mueve subidas de chat al backend; Storage SDK queda denegado.
+async function uploadBytes(reference,bytes,metadata){
+ if(reference.fullPath.startsWith('profile_photos/')){try{return await uploadPhoto(backend,storageOwners.get(reference.storage.app.name),reference.fullPath,Buffer.from(bytes),metadata.contentType);}catch{const e=new Error('Unauthorized photo');e.code='storage/unauthorized';throw e;}}
+ if(!reference.fullPath.startsWith('chat_media/'))return directUploadBytes(reference,bytes,metadata);
+ try{return await uploadChat(backend,storageOwners.get(reference.storage.app.name),reference.fullPath,Buffer.from(bytes),metadata.contentType);}
+ catch{const e=new Error('Unauthorized media upload');e.code='storage/unauthorized';throw e;}
+}
+async function getMetadata(reference){
+ if(reference.fullPath.startsWith('profile_photos/')){try{const data=await readPhoto(backend,storageOwners.get(reference.storage.app.name),reference.fullPath);return {size:data.bytes.length,contentType:data.contentType};}catch{const e=new Error('Unauthorized photo');e.code='storage/unauthorized';throw e;}}
+ if(!reference.fullPath.startsWith('chat_media/'))return directGetMetadata(reference);
+ try{return await readChat(backend,storageOwners.get(reference.storage.app.name),reference.fullPath);}
+ catch(error){const e=new Error('Unauthorized or missing media');e.code=error.code===404?'storage/object-not-found':'storage/unauthorized';throw e;}
+}
+async function deleteObject(reference){
+ try{const uid=storageOwners.get(reference.storage.app.name);if(reference.fullPath.startsWith('profile_photos/'))return await deletePhoto(backend,uid,reference.fullPath);if(reference.fullPath.startsWith('chat_media/'))return await deleteChat(backend,uid,reference.fullPath);return await directDeleteObject(reference);}
+ catch{const e=new Error('Unauthorized cleanup');e.code='storage/unauthorized';throw e;}
+}
 const db = () => context('ana').firestore();
 const profileRef = () => doc(db(), 'users/ana');
 const update = data => updateDoc(profileRef(), {...data, updatedAt:serverTimestamp()});
 const complete = () => ({firstName:'Ana',lastName:'Pérez',gender:'femenino',careerId:'sistemas',photoUrls:[baseUrl('ana')],mainPhotoUrl:baseUrl('ana'),isActive:true});
 
 before(async () => {
-  env = await initializeTestEnvironment({projectId:'demo-tinder-universitario',
-    firestore:{host:'127.0.0.1',port:8088,rules:(await readFile(new URL('../firestore.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},
-    storage:{host:'127.0.0.1',port:9198,rules:(await readFile(new URL('../storage.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},
+  backend=new VerificationBackend(await emulatorServices(rulesProject,{auth:Number(process.env.RULES_AUTH_PORT??9199),firestore:firestorePort,storage:storagePort,hub:Number(process.env.RULES_HUB_PORT??4410)}));
+  env = await initializeTestEnvironment({projectId:rulesProject,
+    firestore:{host:'127.0.0.1',port:firestorePort,rules:(await readFile(new URL('../firestore.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},
+    storage:{host:'127.0.0.1',port:storagePort,rules:(await readFile(new URL('../storage.rules',import.meta.url),'utf8')).replace(/^\uFEFF/,'')},
   });
 });
 after(async () => { await env?.cleanup(); });
 beforeEach(async () => {
   await env.clearFirestore();
+  await env.clearStorage();
   await env.withSecurityRulesDisabled(async admin => {
     const store = admin.firestore();
-    await setDoc(doc(store,'users/ana'), initial());
+    for(const uid of ['ana','bob','carol','dave','eve','carla','mallory']){await setDoc(doc(store,'accountAccess/'+uid),{role:'user',verificationStatus:'approved',suspended:false});await setDoc(doc(store,'profilePhotoManifests/'+uid),{paths:[baseUrl(uid)]});}
+    await setDoc(doc(store,'users/ana'), {...initial(),datingAllowed:true});
+    await setDoc(doc(store,'users/carol'), {...initial(),datingAllowed:true});
     await setDoc(doc(store,'careers/sistemas'), {name:'Sistemas',isActive:true});
     await setDoc(doc(store,'careers/inactiva'), {name:'Inactiva',isActive:false});
     for (let i=0;i<5;i++) await setDoc(doc(store,`interests/i${i}`), {name:`Interés ${i}`,isActive:true});
@@ -38,6 +74,7 @@ beforeEach(async () => {
 test('Registro crea solo user e inactivo', async () => {
   const bob = doc(context('bob').firestore(),'users/bob');
   await assertFails(setDoc(bob,{...initial(),email:'bob@example.com',role:'admin'}));
+  await assertFails(setDoc(bob,{...initial(),email:'bob@example.com',datingAllowed:true}));
   await assertFails(setDoc(bob,{...initial(),email:'bob@example.com',isActive:true}));
   await assertSucceeds(setDoc(bob,{...initial(),email:'bob@example.com'}));
 });
@@ -52,7 +89,7 @@ test('Guardado parcial permitido sin activación', async () => {
   await assertFails(update({isActive:true}));
 });
 test('Campos protegidos, perfiles ajenos y campos extra rechazados', async () => {
-  for (const change of [{role:'admin'},{role:'superadmin'},{email:'otro@example.com'},{createdAt:Timestamp.now()},{semester:2},{careerIds:['sistemas']}]) {
+  for (const change of [{datingAllowed:false},{role:'admin'},{role:'superadmin'},{email:'otro@example.com'},{createdAt:Timestamp.now()},{semester:2},{careerIds:['sistemas']}]) {
     await assertFails(update(change));
   }
   await assertFails(updateDoc(doc(context('bob').firestore(),'users/ana'),{firstName:'Intruso',updatedAt:serverTimestamp()}));
@@ -95,7 +132,7 @@ test('Solo URLs propias, máximo 6 fotos y sin duplicados', async () => {
 test('Storage propietario sube/lee/elimina; terceros y anónimos no', async () => {
   const path='profile_photos/ana/securityPhoto';
   const own=ref(context('ana').storage(),path);
-  await assertSucceeds(uploadBytes(own,new Uint8Array([255,216,255]),{contentType:'image/jpeg'}));
+  await assertSucceeds(uploadBytes(own,await imageFixture('image/jpeg'),{contentType:'image/jpeg'}));
   await assertSucceeds(getMetadata(own));
   await assertFails(getMetadata(ref(context('bob').storage(),path)));
   await assertFails(deleteObject(ref(context('bob').storage(),path)));
@@ -160,7 +197,7 @@ async function seedDiscovery(options={}) {
     ];
     for (const [uid,gender,age,active,preferred,min,max] of entries) {
       const refUser=doc(store,`users/${uid}`);
-      await setDoc(refUser,{...initial(),email:`${uid}@example.com`,firstName:uid==='bob'&&options.incomplete?'':'Estudiante',lastName:'Prueba',gender,birthDate:birthday(age),careerId:'sistemas',photoUrls:[baseUrl(uid)],mainPhotoUrl:baseUrl(uid),isActive:active});
+      await setDoc(refUser,{...initial(),datingAllowed:true,email:`${uid}@example.com`,firstName:uid==='bob'&&options.incomplete?'':'Estudiante',lastName:'Prueba',gender,birthDate:birthday(age),careerId:'sistemas',photoUrls:[baseUrl(uid)],mainPhotoUrl:baseUrl(uid),isActive:active});
       const data=(await getDoc(refUser)).data();
       await setDoc(doc(store,`discoveryCards/${uid}`),projection(data));
       await setDoc(doc(store,`discoveryIndex/${uid}`),{isActive:active,updatedAt:data.updatedAt});
@@ -507,7 +544,7 @@ test('Storage valida vacío, subcarpetas y anónimos; PNG/WebP propios permitido
   await assertFails(uploadBytes(ref(env.unauthenticatedContext().storage(),'profile_photos/ana/anon'),new Uint8Array([1]),{contentType:'image/png'}));
   for (const type of ['png','webp']) {
     const item = ref(store,`profile_photos/ana/qa-${type}`);
-    await assertSucceeds(uploadBytes(item,new Uint8Array([1]),{contentType:`image/${type}`}));
+    await assertSucceeds(uploadBytes(item,await imageFixture(`image/${type}`),{contentType:`image/${type}`}));
     await assertSucceeds(deleteObject(item));
   }
 });
@@ -984,4 +1021,245 @@ test('HU16 controles de bloqueo conservan presupuesto de Rules con carreras dist
   });
   await assertSucceeds(decideWithMatch('ana','bob'));
   await assertSucceeds(decideWithMatch('bob','ana'));
+});
+
+// Auditoría de nuevas funciones: siempre proyecto demo y hosts locales.
+const mediaMessage = (id='media1', type='image', uid='ana') => ({
+  senderId:uid, text:'', type, mediaPath:`chat_media/ana.bob/${uid}/${id}`, createdAt:serverTimestamp()
+});
+const mediaRef = (uid='ana', id='media1', owner='ana') => ref(context(uid).storage(),`chat_media/ana.bob/${owner}/${id}`);
+const uploadMedia = async (id='media1', mime='image/jpeg', size=3, uid='ana') =>
+  uploadBytes(mediaRef(uid,id,uid),size===3||size===5*1024*1024||size===15*1024*1024 ? (['image/jpeg','image/png','image/webp'].includes(mime)?await imageFixture(mime):['audio/wav','audio/mpeg','audio/mp4','audio/ogg'].includes(mime)?await audioFixture(mime):new Uint8Array(3)) : new Uint8Array(size),{contentType:mime});
+
+test('readAt: solo destinatario, timestamp servidor e inmutable', async () => {
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await assertFails(updateDoc(messageRef(db()),{readAt:serverTimestamp()}));
+  await assertFails(updateDoc(messageRef(context('carol').firestore()),{readAt:serverTimestamp()}));
+  await assertFails(updateDoc(messageRef(env.unauthenticatedContext().firestore()),{readAt:serverTimestamp()}));
+  const received=messageRef(context('bob').firestore());
+  for (const readAt of [null,'hoy',Timestamp.fromMillis(1)]) await assertFails(updateDoc(received,{readAt}));
+  await assertFails(updateDoc(received,{readAt:serverTimestamp(),text:'alterado'}));
+  await assertSucceeds(updateDoc(received,{readAt:serverTimestamp()}));
+  await assertFails(updateDoc(received,{readAt:serverTimestamp()}));
+});
+test('readAt no puede inyectarse al crear texto o multimedia', async () => {
+  await chatMatch();
+  for (const data of [chatMessage(),mediaMessage('m1')])
+    await assertFails(setDoc(messageRef(db()),{...data,readAt:serverTimestamp()}));
+});
+test('mediaPath: ruta exacta, remitente y match; contenido inmutable', async () => {
+  await chatMatch();
+  for (const extra of [
+    {mediaPath:'https://example.com/file'}, {mediaPath:'chat_media/ana.bob/bob/media1'},
+    {mediaPath:'chat_media/ana.carol/ana/media1'}, {mediaPath:'chat_media/ana.bob/ana/otro'},
+    {mediaPath:null}, {type:'video'}, {text:'caption'}, {senderId:'bob'}
+  ]) await assertFails(setDoc(messageRef(db(),'media1'),{...mediaMessage(),...extra}));
+  await uploadMedia();await assertSucceeds(setDoc(messageRef(db(),'media1'),mediaMessage()));
+  await assertFails(updateDoc(messageRef(context('bob').firestore(),'media1'),{mediaPath:'otro',readAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(messageRef(context('bob').firestore(),'media1'),{readAt:serverTimestamp()}));
+});
+for (const [mime,type,max] of [
+  ['image/jpeg','image',5],['image/png','image',5],['image/webp','image',5],
+  ['audio/mpeg','audio',15],['audio/mp4','audio',15],['audio/wav','audio',15],['audio/ogg','audio',15]
+]) test(`chat_media ${mime}: archivo válido y rechazo de exceso`, async () => {
+  await chatMatch();
+  const id=mime.replace('/','-');
+  await assertFails(uploadMedia(id,mime,0));
+  await assertFails(uploadMedia(id,mime,max*1024*1024+1));
+  await assertSucceeds(uploadMedia(id,mime,max*1024*1024));
+  await assertSucceeds(setDoc(messageRef(db(),id),mediaMessage(id,type)));
+  await assertSucceeds(getMetadata(mediaRef('bob',id)));
+});
+test('chat_media: rechaza MIME ajeno y rutas de otro usuario', async () => {
+  await chatMatch();
+  for (const mime of ['text/html','image/svg+xml','application/octet-stream','video/mp4'])
+    await assertFails(uploadMedia('wrong-'+mime.replace('/','-'),mime));
+  await assertFails(uploadBytes(mediaRef('bob','foreign','ana'),new Uint8Array(3),{contentType:'image/jpeg'}));
+  await assertFails(uploadBytes(mediaRef('carol','foreign','carol'),new Uint8Array(3),{contentType:'image/jpeg'}));
+});
+test('chat_media: lectura solo participantes y archivo publicado; no reemplazo ni borrado publicado', async () => {
+  await chatMatch(); await assertSucceeds(uploadMedia('private'));
+  await assertFails(getMetadata(mediaRef('bob','private')));
+  await assertSucceeds(setDoc(messageRef(db(),'private'),mediaMessage('private')));
+  await assertSucceeds(getMetadata(mediaRef('ana','private')));
+  await assertSucceeds(getMetadata(mediaRef('bob','private')));
+  await assertFails(getMetadata(mediaRef('carol','private')));
+  await assertFails(getMetadata(ref(env.unauthenticatedContext().storage(),'chat_media/ana.bob/ana/private')));
+  await assertFails(uploadMedia('private'));
+  await assertFails(deleteObject(mediaRef('ana','private')));
+  await assertFails(deleteObject(mediaRef('bob','private')));
+});
+test('chat_media: solo propietario limpia huérfano incluso tras cerrar match', async () => {
+  await chatMatch(); await uploadMedia('orphan');
+  await assertFails(deleteObject(mediaRef('bob','orphan')));
+  await updateDoc(doc(db(),'matches/ana.bob'),closure('ana'));
+  await assertSucceeds(deleteObject(mediaRef('ana','orphan')));
+  await assertFails(uploadMedia('closed'));
+  await assertFails(setDoc(messageRef(db(),'closed'),mediaMessage('closed')));
+});
+for (const blocker of ['ana','bob']) test(`chat_media: bloqueo de ${blocker} revoca subidas y descarga de medios`, async () => {
+  await chatMatch(); await uploadMedia('history-'+blocker);
+  await setDoc(messageRef(db(),'history-'+blocker),mediaMessage('history-'+blocker));
+  await blockPair(blocker,blocker==='ana'?'bob':'ana');
+  for (const uid of ['ana','bob']) {
+    await assertFails(uploadMedia('blocked-'+uid,'image/jpeg',3,uid));
+    await assertFails(getMetadata(mediaRef(uid,'history-'+blocker)));
+  }
+});
+test('chat_media: no puede adjuntarse archivo después de publicar un mensaje', async () => {
+  await chatMatch(); await env.withSecurityRulesDisabled(ctx=>setDoc(doc(ctx.firestore(),'matches/ana.bob/messages/preexisting'),mediaMessage('preexisting')));
+  await assertFails(uploadMedia('preexisting'));
+});
+test('chat_media: match inexistente o malformado deniega subida', async () => {
+  await assertFails(uploadMedia('missing'));
+  await env.withSecurityRulesDisabled(admin=>setDoc(doc(admin.firestore(),'matches/ana.bob'),{
+    users:['ana','carol'],isActive:true,createdAt:Timestamp.now()
+  }));
+  await assertFails(uploadMedia('malformed'));
+});
+
+test('FASE5: mediaPath sin objeto validado se deniega', async () => {
+  await chatMatch();
+  await assertFails(setDoc(messageRef(db(),'missing-object'),mediaMessage('missing-object')));
+  await assertFails(getMetadata(mediaRef('bob','missing-object')));
+});
+test('FASE5: MIME permitido con bytes falsos se deniega', async () => {
+  await chatMatch();
+  await assertFails(uploadBytes(mediaRef('ana','fake-image'),new TextEncoder().encode('<html>no es una imagen</html>'),{contentType:'image/jpeg'}));
+
+});
+test('Backend fase 3: medios nuevos sin token; SDK no genera URL permanente', async () => {
+  await chatMatch(); await uploadMedia('token-file');
+  await setDoc(messageRef(db(),'token-file'),mediaMessage('token-file'));
+  await assert.rejects(getDownloadURL(mediaRef('bob','token-file')));
+});
+
+test('readAt: cierre impide recibos nuevos y conserva lectura de historial', async () => {
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await updateDoc(doc(db(),'matches/ana.bob'),closure('ana'));
+  await assertFails(updateDoc(messageRef(context('bob').firestore()),{readAt:serverTimestamp()}));
+  await assertSucceeds(getDoc(messageRef(context('bob').firestore())));
+});
+for(const blocker of ['ana','bob']) test(`readAt: bloqueo de ${blocker} impide revelar nuevas lecturas`, async () => {
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  await blockPair(blocker,blocker==='ana'?'bob':'ana');
+  await assertFails(updateDoc(messageRef(context('bob').firestore()),{readAt:serverTimestamp()}));
+});
+test('readAt: cierre y recibo en mismo lote rechazados', async () => {
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  const store=context('bob').firestore(); const batch=writeBatch(store);
+  batch.update(doc(store,'matches/ana.bob'),closure('bob'));
+  batch.update(messageRef(store),{readAt:serverTimestamp()});
+  await assertFails(batch.commit());
+});
+
+for(const blocker of ['ana','bob']) test(`Bloqueo de ${blocker} basta aun con match activo inconsistente`, async () => {
+  await chatMatch(); await setDoc(messageRef(db()),chatMessage());
+  const target=blocker==='ana'?'bob':'ana';
+  await env.withSecurityRulesDisabled(admin=>setDoc(doc(admin.firestore(),`blocks/${blocker}.${target}`),{
+    blockerId:blocker,blockedId:target,createdAt:Timestamp.now()
+  }));
+  await assertFails(uploadMedia('blocked-active','image/jpeg'));
+  await assertFails(setDoc(messageRef(db(),'blocked-active'),mediaMessage('blocked-active')));
+  await assertFails(updateDoc(messageRef(context('bob').firestore()),{readAt:serverTimestamp()}));
+});
+
+// Descargas REST equivalentes al nuevo cliente: nunca llevan download token.
+const demoIdToken = uid => {
+  const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const now=Math.floor(Date.now()/1000);
+  return `${b64({alg:'none',typ:'JWT'})}.${b64({sub:uid,user_id:uid,aud:rulesProject,iss:'https://securetoken.google.com/'+rulesProject,iat:now,exp:now+3600,firebase:{sign_in_provider:'custom'}})}.`;
+};
+const authenticatedMediaHttp = (path,uid) => {
+  const bucket=mediaRef('ana').bucket;
+  const url=`http://127.0.0.1:${storagePort}/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}?alt=media`;
+  return fetch(url,{headers:uid?{Authorization:`Firebase ${demoIdToken(uid)}`}:{},redirect:'manual'});
+};
+test('REST sin download token: participante descarga; anónimo y tercero rechazados', async () => {
+  await chatMatch(); await uploadMedia('rest-private');
+  const path='chat_media/ana.bob/ana/rest-private';
+  await setDoc(messageRef(db(),'rest-private'),mediaMessage('rest-private'));
+  for(const uid of ['ana','bob']) {
+    const response=await authenticatedMediaHttp(path,uid);
+    assert.equal(response.status,403); // SDK/REST directos no pueden obtener tokens.
+    assert.equal((await readChat(backend,uid,path,true)).bytes.length,(await imageFixture('image/jpeg')).length);
+  }
+  for(const uid of [undefined,'carol']) assert.equal((await authenticatedMediaHttp(path,uid)).status,403);
+});
+test('Propietario puede verificar subida no publicada; destinatario no puede descargarla', async () => {
+  await chatMatch(); await uploadMedia('verify-upload');
+  const own=await assertSucceeds(getMetadata(mediaRef('ana','verify-upload')));
+  assert.equal(own.size,(await imageFixture('image/jpeg')).length); assert.equal(own.contentType,'image/jpeg');
+  await assertFails(getMetadata(mediaRef('bob','verify-upload')));
+  assert.equal((await authenticatedMediaHttp('chat_media/ana.bob/ana/verify-upload','bob')).status,403);
+  await assertSucceeds(deleteObject(mediaRef('ana','verify-upload')));
+});
+
+test('FASE2 carreras: legado, catálogo activo, duplicados y máximo',async()=>{
+  const pref=doc(db(),'preferences/ana');
+  await assertSucceeds(setDoc(pref,preference()));
+  await assertSucceeds(setDoc(pref,{...preference(),careerIds:['sistemas']}));
+  for(const careerIds of [['inventada'],['inactiva'],['sistemas','sistemas'],[42],['a','b','c','d','e','f'],'sistemas']) {
+    await assertFails(setDoc(pref,{...preference(),careerIds}));
+  }
+});
+test('FASE2 filtro por carrera es recíproco, sin abrir preferencias ajenas',async()=>{
+  await seedDiscovery();
+  await env.withSecurityRulesDisabled(async admin=>{
+    await setDoc(doc(admin.firestore(),'careers/medicina'),{name:'Medicina',isActive:true});
+  });
+  await assertSucceeds(updateDoc(doc(db(),'preferences/ana'),{careerIds:['medicina'],updatedAt:serverTimestamp()}));
+  await assertFails(getDoc(cardForBob()));
+  await assertSucceeds(updateDoc(doc(db(),'preferences/ana'),{careerIds:['sistemas'],updatedAt:serverTimestamp()}));
+  await assertSucceeds(getDoc(cardForBob()));
+  await assertSucceeds(updateDoc(doc(context('bob').firestore(),'preferences/bob'),{careerIds:['medicina'],updatedAt:serverTimestamp()}));
+  await assertFails(getDoc(cardForBob()));
+  await assertFails(getDoc(doc(db(),'preferences/bob')));
+});
+test('FASE2 galería: proyección exacta, pareja activa y privacidad',async()=>{
+  await chatMatch();
+  const bob=context('bob').firestore();
+  const user=(await getDoc(doc(bob,'users/bob'))).data();
+  const gallery={...projection(user),photoUrls:user.photoUrls};
+  await assertSucceeds(setDoc(doc(bob,'matchProfiles/bob'),gallery));
+  await assertSucceeds(getDoc(doc(db(),'matchProfiles/bob')));
+  await assertFails(getDoc(doc(db(),'users/bob')));
+  await assertFails(getDocs(collection(db(),'matchProfiles')));
+  await assertFails(getDoc(doc(context('carol').firestore(),'matchProfiles/bob')));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(),'matchProfiles/bob')));
+  for(const changed of [{...gallery,email:user.email},{...gallery,photoUrls:[baseUrl('carol')]},{...gallery,role:'admin'}]) {
+    await assertFails(setDoc(doc(bob,'matchProfiles/bob'),changed));
+  }
+  await assertFails(setDoc(doc(db(),'matchProfiles/bob'),gallery));
+  await assertSucceeds(updateDoc(doc(db(),'matches/ana.bob'),{isActive:false,closedAt:serverTimestamp(),closedBy:'ana'}));
+  await assertFails(getDoc(doc(db(),'matchProfiles/bob')));
+});
+test('FASE2 galería denegada aun con bloqueo y match inconsistente activo',async()=>{
+  await chatMatch();
+  await env.withSecurityRulesDisabled(async admin=>{
+    const store=admin.firestore();const user=(await getDoc(doc(store,'users/bob'))).data();
+    await setDoc(doc(store,'matchProfiles/bob'),{...projection(user),photoUrls:user.photoUrls});
+    await setDoc(doc(store,'blocks/bob.ana'),{blockerId:'bob',blockedId:'ana',createdAt:serverTimestamp()});
+  });
+  await assertFails(getDoc(doc(db(),'matchProfiles/bob')));
+});
+test('FASE2 nota de voz: duración acotada, recibo solo receptor e inmutable',async()=>{
+  await chatMatch();
+  await uploadMedia('voice','audio/wav');const message=messageRef(db(),'voice');
+  for(const durationMs of [0,-1,60001,'1000'])await assertFails(setDoc(message,{...mediaMessage(),type:'audio',durationMs}));
+  await assertFails(setDoc(message,{...chatMessage(),durationMs:1000}));
+  await assertSucceeds(setDoc(message,{...mediaMessage('voice'),type:'audio',durationMs:1000}));
+  await assertFails(updateDoc(message,{readAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(messageRef(context('bob').firestore(),'voice'),{readAt:serverTimestamp()}));
+  await assertFails(updateDoc(messageRef(context('bob').firestore(),'voice'),{durationMs:2000}));
+});
+test('FASE2 cinco carreras en ambas preferencias respetan presupuesto de reglas',async()=>{
+  await seedDiscovery();
+  const ids=['sistemas','medicina','derecho','psicologia','arquitectura'];
+  await env.withSecurityRulesDisabled(async admin=>{
+    for(const id of ids.slice(1))await setDoc(doc(admin.firestore(),'careers',id),{name:id,isActive:true});
+  });
+  for(const uid of ['ana','bob'])await assertSucceeds(updateDoc(doc(context(uid).firestore(),'preferences',uid),{careerIds:ids,updatedAt:serverTimestamp()}));
+  await assertSucceeds(getDoc(cardForBob()));
+  await assertSucceeds(decideWithMatch('ana','bob'));await assertSucceeds(decideWithMatch('bob','ana'));
 });

@@ -1,8 +1,10 @@
+import '../../widgets/brand_header.dart';
 import '../../widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart' show firebaseError;
 import 'discovery_preferences.dart';
 import 'preferences_service.dart';
+import '../profile/student_profile.dart';
 
 class PreferencesScreen extends StatefulWidget {
   const PreferencesScreen({
@@ -23,6 +25,13 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
   final _form = GlobalKey<FormState>();
   int _min = DiscoveryLimits.minAge, _max = DiscoveryLimits.maxAge;
   String? _gender;
+  List<CatalogItem> _careers = [];
+  Set<String> _careerIds = {};
+  static const _academic = bool.fromEnvironment('LIGO_MULTIUNIVERSITY');
+  String _universityMode = 'all';
+  Set<String> _universities = {}, _interests = {};
+  List<CatalogItem> _universityOptions = [], _interestOptions = [];
+  bool _hasUniversity = false;
   bool _loading = true, _saving = false;
   String? _error, _notice;
   @override
@@ -38,10 +47,32 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
     });
     try {
       final value = await _service.load(widget.uid);
+      final careers = await _service.careers();
+      final extra = _academic
+          ? await Future.wait([
+              _service.academicOptions('universities'),
+              _service.academicOptions('interests'),
+            ])
+          : null;
+      final own = _academic && await _service.hasUniversity(widget.uid);
+      if (mounted) {
+        setState(() {
+          _careers = careers;
+          _universityOptions = extra?[0] ?? [];
+          _interestOptions = extra?[1] ?? [];
+          _hasUniversity = own;
+        });
+      }
       if (mounted && value != null) {
         setState(() {
           _min = value.minAge;
           _max = value.maxAge;
+          _careerIds = value.careerIds.toSet();
+          _universityMode = value.universityMode == 'mine' && !own
+              ? 'all'
+              : value.universityMode;
+          _universities = value.universityIds.toSet();
+          _interests = value.interestIds.toSet();
           _gender = PreferredGender.isValid(value.preferredGender)
               ? value.preferredGender
               : null;
@@ -56,6 +87,18 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
 
   Future<void> _save() async {
     if (_saving || !_form.currentState!.validate()) return;
+    if (_academic &&
+        (_universityMode == 'selected' && _universities.isEmpty ||
+            _careerIds.length +
+                    _interests.length +
+                    (_universityMode == 'selected' ? _universities.length : 0) >
+                9)) {
+      setState(
+        () => _error =
+            'Elige al menos una universidad en el modo de selección y hasta nueve filtros combinados.',
+      );
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -68,6 +111,12 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
           minAge: _min,
           maxAge: _max,
           preferredGender: _gender!,
+          careerIds: _careerIds.toList()..sort(),
+          universityMode: _universityMode,
+          universityIds: _universityMode == 'selected'
+              ? _universities.toList()
+              : [],
+          interestIds: _interests.toList(),
         ),
       );
       if (mounted) {
@@ -92,7 +141,7 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Preferencias'),
+      title: const BrandHeader('Preferencias'),
       leading: IconButton(
         onPressed: _saving ? null : widget.onBack,
         icon: const Icon(Icons.arrow_back),
@@ -113,10 +162,10 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const AppMark(size: 56),
+                        const LigoLogo(size: 38),
                         const SizedBox(height: 24),
                         const Text(
-                          '¿A quién te gustaría conocer?',
+                          'Tu próxima conexión, a tu manera.',
                           style: TextStyle(
                             fontSize: 24,
                             fontWeight: FontWeight.bold,
@@ -157,11 +206,95 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
                         const SectionHeading(
                           'Rango de edad',
                           icon: Icons.tune_rounded,
-                          subtitle: 'Entre 18 y 100 años',
+                          subtitle: 'Selecciona el rango de edad',
                         ),
                         _ageField('Edad mínima', _min, (value) => _min = value),
                         const SizedBox(height: 20),
                         _ageField('Edad máxima', _max, (value) => _max = value),
+                        const SectionHeading(
+                          'Carreras de interés',
+                          icon: Icons.school_outlined,
+                          subtitle:
+                              'Hasta 5 carreras. Sin selección: todas. La compatibilidad es recíproca.',
+                        ),
+                        for (final id in _careerIds.where(
+                          (id) => !_careers.any((c) => c.id == id),
+                        ))
+                          ListTile(
+                            title: const Text('Carrera ya no disponible'),
+                            trailing: IconButton(
+                              tooltip: 'Quitar carrera no disponible',
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(() => _careerIds.remove(id)),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ),
+                        Wrap(
+                          spacing: 8,
+                          children: _careers
+                              .map(
+                                (career) => FilterChip(
+                                  label: Text(career.name),
+                                  selected: _careerIds.contains(career.id),
+                                  onSelected: _saving
+                                      ? null
+                                      : (selected) => setState(() {
+                                          if (!selected) {
+                                            _careerIds.remove(career.id);
+                                          } else if (_careerIds.length < 5) {
+                                            _careerIds.add(career.id);
+                                          } else {
+                                            _error =
+                                                'Selecciona como máximo 5 carreras.';
+                                          }
+                                        }),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                        if (_academic) ...[
+                          const SectionHeading(
+                            'Universidades',
+                            icon: Icons.account_balance_outlined,
+                          ),
+                          DropdownButtonFormField<String>(
+                            initialValue: _universityMode,
+                            decoration: const InputDecoration(
+                              labelText: 'Filtro universitario',
+                            ),
+                            items: [
+                              const DropdownMenuItem(
+                                value: 'all',
+                                child: Text('Todas las universidades'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'mine',
+                                enabled: _hasUniversity,
+                                child: const Text('Mi universidad'),
+                              ),
+                              const DropdownMenuItem(
+                                value: 'selected',
+                                child: Text('Elegir universidades'),
+                              ),
+                            ],
+                            onChanged: _saving
+                                ? null
+                                : (value) =>
+                                      setState(() => _universityMode = value!),
+                          ),
+                          if (!_hasUniversity)
+                            const Text(
+                              'Tu perfil aún no tiene una universidad declarada.',
+                            ),
+                          if (_universityMode == 'selected')
+                            _filters(_universityOptions, _universities),
+                          const SectionHeading(
+                            'Intereses',
+                            icon: Icons.interests_outlined,
+                          ),
+                          _filters(_interestOptions, _interests),
+                        ],
                         if (_error != null) AppNotice(_error!, error: true),
                         if (_notice != null) AppNotice(_notice!),
                         const SizedBox(height: 24),
@@ -216,4 +349,30 @@ class _PreferencesScreenState extends State<PreferencesScreen> {
             ? 'La edad mínima no puede superar la máxima.'
             : null,
       );
+  Widget _filters(List<CatalogItem> options, Set<String> selected) => Wrap(
+    spacing: 8,
+    children: [
+      for (final option in options)
+        FilterChip(
+          label: Text(option.name),
+          selected: selected.contains(option.id),
+          onSelected: _saving
+              ? null
+              : (value) => setState(() {
+                  if (!value) {
+                    selected.remove(option.id);
+                  } else if (selected.length < 5) {
+                    selected.add(option.id);
+                  }
+                }),
+        ),
+      for (final id in selected.where(
+        (id) => !options.any((item) => item.id == id),
+      ))
+        InputChip(
+          label: const Text('Opción no disponible'),
+          onDeleted: _saving ? null : () => setState(() => selected.remove(id)),
+        ),
+    ],
+  );
 }

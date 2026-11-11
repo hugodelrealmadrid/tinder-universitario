@@ -1,0 +1,6 @@
+# Variables públicas. Sin claves JSON; Cloud Run utiliza identidad de servicio.
+APP_ENV: "production"
+GOOGLE_CLOUD_PROJECT: "tinder-universitario"
+TINDER_PROJECT_ID: "tinder-universitario"
+TINDER_STORAGE_BUCKET: "tinder-universitario.firebasestorage.app"
+TINDER_WEB_ORIGINS: "https://tinder-universitario.web.app,https://tinder-universitario.firebaseapp.com"

@@ -11,6 +11,8 @@ abstract final class DiscoveryPublication {
     'age': user['birthDate'] is Timestamp
         ? ageOn((user['birthDate'] as Timestamp).toDate(), today: today)
         : null,
+    if (user.containsKey('campusId')) 'campusId': user['campusId'],
+    if (user.containsKey('universityId')) 'universityId': user['universityId'],
     for (final field in [
       'firstName',
       'gender',
@@ -34,5 +36,9 @@ abstract final class DiscoveryPublication {
       'updatedAt': user['updatedAt'],
     });
     tx.set(db.collection('discoveryCards').doc(uid), card(user));
+    tx.set(db.collection('matchProfiles').doc(uid), {
+      ...card(user),
+      'photoUrls': user['photoUrls'],
+    });
   }
 }

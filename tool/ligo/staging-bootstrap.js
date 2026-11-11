@@ -1,0 +1,11 @@
+import * as core from './vendor/firebase-app.js';
+import * as auth from './vendor/firebase-auth.js';
+import * as firestore from './vendor/firebase-firestore.js';
+import * as pipelines from './vendor/firebase-firestore-pipelines.js';
+import * as storage from './vendor/firebase-storage.js';
+if(location.hostname!=='127.0.0.1'||location.port!=='7465'||navigator.serviceWorker?.controller)throw Error('Staging origin required without service worker');
+const check=(app,instance)=>{if(app.options.projectId!=='demo-ligo-staging')throw Error('Staging project required');if(!instance.emulatorConfig)auth.connectAuthEmulator(instance,'http://127.0.0.1:9399');if(instance.emulatorConfig?.host!=='127.0.0.1'||instance.emulatorConfig?.port!==9399)throw Error('Staging Auth emulator required');return instance;};
+window.firebase_core=core;
+window.firebase_auth={...auth,initializeAuth(app,options){if(app.options.projectId!=='demo-ligo-staging')throw Error('Staging project required');return check(app,auth.initializeAuth(app,{...options,persistence:auth.browserSessionPersistence}));},getAuth(app){return check(app,auth.getAuth(app));}};
+window.firebase_firestore=firestore;window.firebase_firestore_pipelines=pipelines;window.firebase_storage=storage;
+const script=document.createElement('script');script.src='/flutter_bootstrap.js';document.body.appendChild(script);

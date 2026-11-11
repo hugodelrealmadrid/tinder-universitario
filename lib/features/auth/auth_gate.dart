@@ -1,3 +1,4 @@
+import 'guided_registration.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'auth_form.dart';
@@ -6,6 +7,7 @@ import 'login_screen.dart';
 import 'register_screen.dart';
 import 'email_verification_screen.dart';
 import '../home/home_screen.dart';
+import '../verification/university_gate.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key, required this.service});
@@ -35,23 +37,35 @@ class _AuthGateState extends State<AuthGate> {
           user: snapshot.data!,
         );
       }
-      return _register
-          ? RegisterScreen(
-              service: widget.service,
-              onLogin: () => setState(() => _register = false),
-            )
-          : LoginScreen(
-              service: widget.service,
-              onRegister: () => setState(() => _register = true),
-            );
+      return PopScope(
+        canPop: !_register,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _register) setState(() => _register = false);
+        },
+        child: _register
+            ? RegisterScreen(
+                service: widget.service,
+                onLogin: () => setState(() => _register = false),
+              )
+            : LoginScreen(
+                service: widget.service,
+                onRegister: () => setState(() => _register = true),
+              ),
+      );
     },
   );
 }
 
 class ProfileGate extends StatefulWidget {
-  const ProfileGate({super.key, required this.service, required this.user});
+  const ProfileGate({
+    super.key,
+    required this.service,
+    required this.user,
+    this.verifiedBuilder,
+  });
   final AuthService service;
   final User user;
+  final WidgetBuilder? verifiedBuilder;
   @override
   State<ProfileGate> createState() => _ProfileGateState();
 }
@@ -60,6 +74,7 @@ class _ProfileGateState extends State<ProfileGate> {
   late Future<bool> _profile = widget.service.ensureProfile(widget.user);
   final _form = GlobalKey<FormState>();
   DateTime? _date;
+  static const _academic = bool.fromEnvironment('LIGO_MULTIUNIVERSITY');
   @override
   Widget build(BuildContext context) => FutureBuilder<bool>(
     future: _profile,
@@ -79,7 +94,26 @@ class _ProfileGateState extends State<ProfileGate> {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
       if (snapshot.data == true) {
-        return HomeScreen(service: widget.service, uid: widget.user.uid);
+        if (widget.verifiedBuilder != null) {
+          return widget.verifiedBuilder!(context);
+        }
+        return UniversityGate(
+          service: widget.service,
+          uid: widget.user.uid,
+          child: HomeScreen(service: widget.service, uid: widget.user.uid),
+        );
+      }
+      if (_academic) {
+        return GuidedRegistration(
+          service: widget.service,
+          recoveryUser: widget.user,
+          onLogin: () {
+            widget.service.logout();
+          },
+          onRecovered: () => setState(() {
+            _profile = Future.value(true);
+          }),
+        );
       }
       return AuthCard(
         child: Form(
@@ -95,7 +129,7 @@ class _ProfileGateState extends State<ProfileGate> {
                     : 'Tu cuenta está creada. Confirma tu fecha de nacimiento para crear el documento inicial.',
               ),
               const SizedBox(height: 16),
-              if (!snapshot.hasError)
+              if (!snapshot.hasError && !widget.service.hasPendingBirthDate)
                 BirthDateField(onChanged: (date) => _date = date),
               FilledButton(
                 onPressed: () {

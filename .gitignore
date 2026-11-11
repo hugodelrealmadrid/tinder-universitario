@@ -48,3 +48,39 @@ app.*.map.json
 /tool/node_modules/
 /.firebase/
 *service-account*.json
+
+/tool/ffmpeg/
+
+# Evidencias locales: pueden contener identificadores, sesiones o datos del demo.
+/audit-*.json
+/audit-*.patch
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+**/key.properties
+**/*serviceAccount*.json
+
+# Configuraciones locales del entorno alojado (plantillas públicas en deploy/).
+/deploy/*.local.json
+/deploy/*.local.env
+/android/app/src/production/google-services.json
+/android/app/src/development/google-services.json
+
+# Exportaciones temporales que puede generar el hub de emuladores.
+/firebase-export-*/
+
+# Reportes generados por Gradle; nunca código del producto.
+/android/build/
+
+# Material de firma, respaldos y artefactos generados.
+*.p12
+*.pfx
+*.7z
+*.dpapi
+*.apk
+*.aab
+/tool/emulator-cache/
+**/.gradle/
+**/local.properties
